@@ -1,0 +1,661 @@
+/***********************************************************************
+ * ELECTRONIC BATTLESHIP – TWO PLAYER DEMO
+ * --------------------------------------------------------------
+ *
+ * OVERVIEW:
+ * This is a two-player Battleship-style game using two 10×10 NeoPixel
+ * LED grids. Each player has their own grid, buttons, and aiming controls.
+ * Ships are placed randomly at startup (demo mode).
+ *
+ * HARDWARE PER PLAYER:
+ *  - 10×10 NeoPixel grid (serpentine wired)
+ *  - Green button  → "Arm / Lock-in target"
+ *  - Red button    → "Fire"
+ *  - Two analog controls (row + column selection)
+ *  - Green LED     → Ready / waiting to aim
+ *  - Red LED       → Ready to fire
+ *
+ * BASIC GAME FLOW:
+ *  1. Player's turn starts with GREEN LED blinking.
+ *  2. Turn the row/column controls to select a target square.
+ *  3. Press GREEN button to lock in the coordinate.
+ *     - RED LED begins blinking
+ *     - Yellow aiming animation appears on the grid
+ *  4. Press RED button to fire.
+ *     - RED LED = HIT
+ *     - GRAY LED = MISS
+ *  5. If HIT → same player goes again.
+ *    If MISS → turn switches to the other player.
+ *  6. Game ends when all ship locations are hit.
+ *
+ * LED COLORS:
+ *  - Blue  : Ocean / background
+ *  - Yellow: Aiming animation (temporary)
+ *  - Red   : Hit
+ *  - Gray  : Miss
+ *
+ * IMPORTANT IMPLEMENTATION NOTES:
+ *  - The LED grid uses serpentine (zig-zag) indexing.
+ *  - LED states are saved/restored during animations so hits/misses
+ *    are not overwritten.
+ *  - Button inputs use INPUT_PULLUP (pressed = LOW).
+ *  - Ship placement is random and hidden from players.
+ *
+ * DEMO / EXTENSION IDEAS:
+ *  - Add sound effects (I2S audio board)
+ *  - Add physical ship placement detection
+ *  - Add score tracking or sunk-ship animations
+ *
+ ***********************************************************************/
+ #include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_NeoPixel.h>
+
+// AVR-only include (not used on ESP32, but harmless)
+#ifdef __AVR__
+ #include <avr/power.h>
+#endif
+
+// ============================================================
+//                     LED MATRIX SETTINGS
+// ============================================================
+// 10x10 NeoPixel grid = 100 LEDs total
+#define LED_COUNT 100
+
+// ============================================================
+//                     PLAYER 1 HARDWARE PINS
+// ============================================================
+// Buttons (INPUT_PULLUP): pressed = LOW, released = HIGH
+#define P1_GREEN_BTN   42
+#define P1_RED_BTN     41
+
+// Indicator LEDs (OUTPUT)
+#define P1_GREEN_LED   40
+#define P1_RED_LED     39
+
+// Pot / analog ladder inputs for aiming coordinate selection
+// (These go into getPosition() to turn ADC values into 0..9)
+#define P1_POT_ROW     6
+#define P1_POT_COL     7
+
+// NeoPixel DATA pin for Player 1's 10x10 grid
+#define P1_LED_PIN     4
+
+// ============================================================
+//                     PLAYER 2 HARDWARE PINS
+// ============================================================
+#define P2_GREEN_BTN   38
+#define P2_RED_BTN     37
+#define P2_GREEN_LED   36
+#define P2_RED_LED     35
+#define P2_POT_ROW     9
+#define P2_POT_COL     10
+#define P2_LED_PIN     1
+
+// ============================================================
+//                     GAME ENUMS / STATE
+// ============================================================
+// Identify players
+enum Player {
+  PLAYER_1 = 0,
+  PLAYER_2 = 1
+};
+
+// Main game states
+// WAITING_FOR_AIM        = player hasn't "armed" the aim yet (green LED blinks)
+// WAITING_FOR_CONFIRM    = player is aiming / ready to fire (red LED blinks)
+// GAME_OVER              = someone found all targets
+enum GameState {
+  WAITING_FOR_AIM,
+  AIMING,
+  WAITING_FOR_CONFIRM,
+  GAME_OVER
+};
+
+// Current active player and state
+Player activePlayer = PLAYER_1;
+GameState gameState = WAITING_FOR_AIM;
+
+// Helper: return the other player
+Player otherPlayer(Player p) {
+  return (p == PLAYER_1) ? PLAYER_2 : PLAYER_1;
+}
+
+// ============================================================
+//                     BOARD DATA STRUCTURE
+// ============================================================
+// ships[r][c] = 1 means a ship occupies that cell
+// found[r][c] = true means this cell has already been fired at successfully
+// remaining   = total remaining ship cells not yet hit
+struct Board {
+  int  ships[10][10];
+  bool found[10][10];
+  int  remaining;
+};
+
+// One board per player (each player has hidden ships)
+Board boards[2];
+
+// Places ships randomly into ships[][] and sets remaining
+void initrandomMatrix(Board &b);
+
+// ============================================================
+//                     PLAYER HARDWARE STRUCTURE
+// ============================================================
+// Each player has:
+//  - a NeoPixel strip object (10x10 grid)
+//  - two analog inputs for row/col selection (ladder pots)
+//  - two buttons (green = arm, red = fire)
+//  - two indicator LEDs
+//  - a saved color buffer (previousColors) used during aiming animation
+struct PlayerHW {
+  Adafruit_NeoPixel strip;
+
+  int potRowPin;
+  int potColPin;
+
+  int greenBtn;
+  int redBtn;
+
+  int greenLED;
+  int redLED;
+
+  // Current selected cell (0..9)
+  int inputRow;
+  int inputCol;
+
+  // Not heavily used, but kept for future expansion
+  bool aimingActive;
+
+  // Backup of what the LEDs were showing before the aiming animation draws
+  uint32_t previousColors[LED_COUNT];
+};
+
+// Create the two players' hardware objects
+PlayerHW players[2] = {
+  {
+    Adafruit_NeoPixel(LED_COUNT, P1_LED_PIN, NEO_GRB + NEO_KHZ800),
+    P1_POT_ROW, P1_POT_COL,
+    P1_GREEN_BTN, P1_RED_BTN,
+    P1_GREEN_LED, P1_RED_LED,
+    -1, -1, false
+  },
+  {
+    Adafruit_NeoPixel(LED_COUNT, P2_LED_PIN, NEO_GRB + NEO_KHZ800),
+    P2_POT_ROW, P2_POT_COL,
+    P2_GREEN_BTN, P2_RED_BTN,
+    P2_GREEN_LED, P2_RED_LED,
+    -1, -1, false
+  }
+};
+
+// ============================================================
+//                     FUNCTION PROTOTYPES
+// ============================================================
+void refreshColors(PlayerHW &pl);
+void saveColors(PlayerHW &pl);
+
+void aiming(PlayerHW &pl);
+
+void blinkIndicatorR(PlayerHW &pl);
+void blinkIndicatorG(PlayerHW &pl);
+
+void hitLightUp(PlayerHW &pl, int r, int c);
+void missLightUp(PlayerHW &pl, int r, int c);
+
+bool commitShot(PlayerHW &pl);
+
+void endTurn();
+void winSequence();
+
+int indexConvert(int r, int c);
+int getPosition(int positionPin);
+bool buttonPressed(int pin);
+
+// ============================================================
+//                 INPUT / AIMING ANIMATION STATE
+// ============================================================
+// These track the previous row/col so we can detect when the player moved the knob
+int preInputRow = -1;
+int preInputCol = -1;
+
+// Aiming animation globals
+bool aimingActive = false;
+unsigned long lastAimUpdate = 0;
+int aimStep = 0;
+int aimMax  = 0;
+int aimRow  = 0;
+int aimCol  = 0;
+
+// Unused currently (left in your original)
+int y = 0;
+char displayRow;
+int displayCol;
+int potVal1 = 0;
+int potVal2 = 0;
+
+// ============================================================
+//                            SETUP
+// ============================================================
+void setup() {
+  // AVR-only prescaler setting (does nothing on ESP32)
+  #if defined(__AVR_ATtiny85__) && (F_CPU == 16000000)
+  clock_prescale_set(clock_div_1);
+  #endif
+
+  Serial.begin(115200);
+
+  // ----------------------------------------------------------
+  // Initialize both NeoPixel grids + button pins + indicator LEDs
+  // ----------------------------------------------------------
+  for (int p = 0; p < 2; p++) {
+    // Start NeoPixels
+    players[p].strip.begin();
+
+    // Set initial background color for the whole grid
+    // NOTE: This is the "ocean" background
+    // If you want 50% blue, use (0,0,127)
+    for (int i = 0; i < LED_COUNT; i++) {
+      players[p].strip.setPixelColor(i, 0, 0, 25);
+    }
+    players[p].strip.show();
+
+    // Buttons use internal pullups
+    pinMode(players[p].greenBtn, INPUT_PULLUP);
+    pinMode(players[p].redBtn, INPUT_PULLUP);
+
+    // Indicator LEDs
+    pinMode(players[p].greenLED, OUTPUT);
+    pinMode(players[p].redLED, OUTPUT);
+
+    digitalWrite(players[p].greenLED, LOW);
+    digitalWrite(players[p].redLED, LOW);
+  }
+
+  // Seed randomness for ship placement
+  randomSeed(analogRead(A0));
+
+  // Create random ship layouts for each player's hidden ship board
+  initrandomMatrix(boards[0]);
+  initrandomMatrix(boards[1]);
+}
+
+// ============================================================
+//                            LOOP
+// ============================================================
+void loop() {
+
+  // Reference to the active player's hardware (strip/buttons/knobs)
+  PlayerHW &pl = players[activePlayer];
+
+  // Read current row/col selection from the resistor ladder ADCs
+  pl.inputRow = getPosition(pl.potRowPin);
+  pl.inputCol = getPosition(pl.potColPin);
+
+  // Read buttons (debounced)
+  bool green = buttonPressed(pl.greenBtn); // "arm/lock" (go into aiming mode)
+  bool red   = buttonPressed(pl.redBtn);   // "fire" (commit shot)
+
+  // ----------------------------------------------------------
+  // Main State Machine
+  // ----------------------------------------------------------
+  switch (gameState) {
+
+    // -----------------------------
+    // WAITING_FOR_AIM:
+    // Green LED blinks.
+    // Press green to go into WAITING_FOR_CONFIRM.
+    // -----------------------------
+    case WAITING_FOR_AIM:
+      blinkIndicatorG(pl);
+      if (green) {
+        gameState = WAITING_FOR_CONFIRM;
+        digitalWrite(pl.greenLED, HIGH); // show armed
+      }
+      break;
+
+    // -----------------------------
+    // WAITING_FOR_CONFIRM:
+    // Red LED blinks.
+    // Aiming animation runs based on selected row/col.
+    // Press red to fire.
+    // -----------------------------
+    case WAITING_FOR_CONFIRM:
+      aiming(pl);
+      blinkIndicatorR(pl);
+
+      // Fire button
+      if (red) {
+        bool hit = commitShot(pl);     // updates enemy board, lights hit/miss
+        aimingActive = false;          // stop aiming animation
+        refreshColors(pl);             // restore saved colors (base + markers)
+        pl.strip.show();
+
+        // If miss: switch player
+        if (!hit && gameState != GAME_OVER) {
+          endTurn();
+          digitalWrite(pl.redLED, LOW);
+          digitalWrite(pl.greenLED, LOW);
+        } else {
+          // If hit: same player goes again
+          gameState = WAITING_FOR_AIM;
+          digitalWrite(pl.redLED, LOW);
+          digitalWrite(pl.greenLED, LOW);
+        }
+      }
+
+      // If player moves knob while in confirm mode:
+      // Cancel confirm and return to waiting for aim (so you must "lock in" again)
+      if (pl.inputRow != preInputRow || pl.inputCol != preInputCol) {
+        gameState = WAITING_FOR_AIM;
+        aimingActive = false;
+        refreshColors(pl);
+        pl.strip.show();
+      }
+      break;
+
+    // -----------------------------
+    // GAME_OVER:
+    // Runs win sequence then halts.
+    // -----------------------------
+    case GAME_OVER:
+      winSequence();
+      while (true) delay(1000); // hard stop
+  }
+
+  // Save current inputs for next loop comparison
+  preInputRow = pl.inputRow;
+  preInputCol = pl.inputCol;
+}
+
+// ============================================================
+//                    END TURN / SWITCH PLAYER
+// ============================================================
+void endTurn() {
+  aimingActive = false;
+
+  // Clear last selection for current player
+  players[activePlayer].inputRow = -1;
+  players[activePlayer].inputCol = -1;
+
+  // Switch active player
+  activePlayer = otherPlayer(activePlayer);
+  gameState = WAITING_FOR_AIM;
+}
+
+// ============================================================
+//              RANDOM SHIP PLACEMENT (DEMO MODE)
+// ============================================================
+// Places 5 ships in classic battleship lengths: 5,4,3,3,2
+// Ships are placed either horizontal or vertical, no overlap checking only
+void initrandomMatrix(Board &b) {
+  memset(b.ships, 0, sizeof(b.ships));
+  memset(b.found, 0, sizeof(b.found));
+  b.remaining = 0;
+
+  struct Block { int len; };
+  Block blocks[] = {{5}, {4}, {3}, {3}, {2}};
+
+  for (auto &blk : blocks) {
+    bool placed = false;
+    while (!placed) {
+      int len = blk.len;
+      bool horiz = random(2);          // 0 or 1
+      int line = random(10);           // fixed row if horizontal, fixed col if vertical
+      int start = random(0, 10 - len); // start index so it fits
+
+      // Check for overlap
+      bool ok = true;
+      for (int i = 0; i < len; i++) {
+        int r = horiz ? line : start + i;
+        int c = horiz ? start + i : line;
+        if (b.ships[r][c]) { ok = false; break; }
+      }
+      if (!ok) continue;
+
+      // Place ship
+      for (int i = 0; i < len; i++) {
+        int r = horiz ? line : start + i;
+        int c = horiz ? start + i : line;
+        b.ships[r][c] = 1;
+      }
+
+      b.remaining += len;  // total number of ship cells
+      placed = true;
+    }
+  }
+}
+
+// ============================================================
+//                 COLOR SAVE/RESTORE HELPERS
+// ============================================================
+// saveColors(): copy current LED colors into the backup array
+// Used before drawing aiming animation so we can revert afterward.
+void saveColors(PlayerHW &pl){
+  for (int i = 0; i < LED_COUNT; i++){
+    pl.previousColors[i] = pl.strip.getPixelColor(i);
+  }
+}
+
+// refreshColors(): restore the LED colors from the backup array
+void refreshColors(PlayerHW &pl){
+  for (int i = 0; i < LED_COUNT; i++){
+    pl.strip.setPixelColor(i, pl.previousColors[i]);
+  }
+}
+
+// ============================================================
+//                    AIMING ANIMATION
+// ============================================================
+// Draws a yellow "crosshair" expanding from selected cell.
+// It does this by restoring the saved colors, then drawing yellow on top.
+// When the animation finishes, it restores original colors.
+void aiming(PlayerHW &pl){
+  if (!aimingActive) {
+    aimingActive = true;
+
+    // Lock in the selected target at the moment the animation starts
+    aimRow = pl.inputRow;
+    aimCol = pl.inputCol;
+
+    aimStep = 0;
+    aimMax = max(max(9 - aimCol, aimCol), max(9 - aimRow, aimRow));
+    lastAimUpdate = millis();
+
+    // Save the current LED state (background + past hits/misses)
+    saveColors(pl);
+    refreshColors(pl);
+    pl.strip.show();
+    return;
+  }
+
+  // Update animation every 50ms
+  if (millis() - lastAimUpdate >= 50) {
+    lastAimUpdate = millis();
+
+    // Restore base colors before drawing the next frame
+    refreshColors(pl);
+
+    // i = distance from center, animates inward/outward depending on math
+    int i = aimMax - aimStep;
+
+    // Draw yellow cross arms if within bounds
+    if (i <= (9 - aimCol)) pl.strip.setPixelColor(indexConvert(aimRow, aimCol + i), 255, 255, 0);
+    if (i <= aimCol)       pl.strip.setPixelColor(indexConvert(aimRow, aimCol - i), 255, 255, 0);
+    if (i <= aimRow)       pl.strip.setPixelColor(indexConvert(aimRow - i, aimCol), 255, 255, 0);
+    if (i <= (9 - aimRow)) pl.strip.setPixelColor(indexConvert(aimRow + i, aimCol), 255, 255, 0);
+
+    pl.strip.show();
+    aimStep++;
+
+    // If finished, restore original saved colors and stop
+    if (aimStep > aimMax) {
+      refreshColors(pl);
+      pl.strip.show();
+      aimingActive = false;
+    }
+  }
+}
+
+// ============================================================
+//                 INDICATOR LED BLINKING
+// ============================================================
+// Red indicator LED blink (fires when waiting to confirm)
+void blinkIndicatorR(PlayerHW &pl) {
+  static unsigned long rPrevBlink = 0;
+  static bool rStateBlink = false;
+
+  if (millis() - rPrevBlink > 100) {
+    rPrevBlink = millis();
+    rStateBlink = !rStateBlink;
+    digitalWrite(pl.redLED, rStateBlink);
+  }
+}
+
+// Green indicator LED blink (fires when waiting to aim)
+void blinkIndicatorG(PlayerHW &pl) {
+  static unsigned long gPrevBlink = 0;
+  static bool gStateBlink = false;
+
+  if (millis() - gPrevBlink > 100) {
+    gPrevBlink = millis();
+    gStateBlink = !gStateBlink;
+    digitalWrite(pl.greenLED, gStateBlink);
+  }
+}
+
+// ============================================================
+//                     FIRE / HIT / MISS LOGIC
+// ============================================================
+// commitShot():
+// - checks bounds
+// - ignores already-fired coordinates
+// - checks enemy ships[][] for a hit
+// - lights up red for hit, gray for miss
+// - reduces enemy.remaining on hit
+// - sets GAME_OVER if remaining hits 0
+bool commitShot(PlayerHW &pl) {
+
+  // Bounds check
+  if (pl.inputRow < 0 || pl.inputRow > 9 || pl.inputCol < 0 || pl.inputCol > 9)
+    return false;
+
+  // Enemy board is the other player’s hidden ships
+  Board &enemy = boards[otherPlayer(activePlayer)];
+
+  // If already fired here, do nothing (treat as miss/no-op)
+  if (enemy.found[pl.inputRow][pl.inputCol])
+    return false;
+
+  // Make sure aiming overlay doesn't permanently overwrite colors
+  refreshColors(pl);
+
+  // HIT case
+  if (enemy.ships[pl.inputRow][pl.inputCol]) {
+    enemy.found[pl.inputRow][pl.inputCol] = true;
+    enemy.remaining--;
+
+    hitLightUp(pl, pl.inputRow, pl.inputCol);
+    saveColors(pl);  // save updated LED state (now includes this hit)
+
+    // If all enemy ship cells are hit, game over
+    if (enemy.remaining == 0) {
+      gameState = GAME_OVER;
+    }
+
+    return true;
+  }
+
+  // MISS case
+  missLightUp(pl, pl.inputRow, pl.inputCol);
+  saveColors(pl); // save updated LED state (now includes this miss)
+  return false;
+}
+
+// ============================================================
+//                  LED MARKERS (HIT / MISS)
+// ============================================================
+// Hit marker = red
+void hitLightUp(PlayerHW &pl, int r, int c) {
+  pl.strip.setPixelColor(indexConvert(r, c), 255, 0, 0);
+  pl.strip.show();
+}
+
+// Miss marker = gray/white-ish
+void missLightUp(PlayerHW &pl, int r, int c) {
+  pl.strip.setPixelColor(indexConvert(r, c), 127, 127, 127);
+  pl.strip.show();
+}
+
+// ============================================================
+//          GRID COORD -> LED INDEX (SERPENTINE WIRING)
+// ============================================================
+// Your 10x10 grid is wired serpentine:
+// Row 0 goes left->right, Row 1 goes right->left, etc.
+int indexConvert(int r, int c){
+  int x = 0;
+
+  if (r % 2 == 0) {
+    // even row: normal
+    x = (r * 10) + c;
+  } else {
+    // odd row: reversed
+    x = (r * 10) + (9 - c);
+  }
+
+  return x;
+}
+
+// ============================================================
+//           ADC LADDER -> DISCRETE POSITION 0..9
+// ============================================================
+// Reads the analog value and maps it to 0..9 based on thresholds
+// IMPORTANT: these thresholds are tuned to your hardware ladder
+int getPosition(int positionPin){
+  int positionValue = 0;
+  int sensorValue = analogRead(positionPin);
+
+  if (sensorValue < 210) positionValue = 9;
+  else if (sensorValue < 635) positionValue = 8;
+  else if (sensorValue < 1070) positionValue = 7;
+  else if (sensorValue < 1510) positionValue = 6;
+  else if (sensorValue < 1960) positionValue = 5;
+  else if (sensorValue < 2400) positionValue = 4;
+  else if (sensorValue < 2860) positionValue = 3;
+  else if (sensorValue < 3380) positionValue = 2;
+  else if (sensorValue < 3880) positionValue = 1;
+  else if (sensorValue > 3880) positionValue = 0;
+
+  return positionValue;
+}
+
+// ============================================================
+//                    BUTTON DEBOUNCE
+// ============================================================
+// Simple debounce using per-pin memory in static arrays.
+// Because ESP32 pin numbers can be large, this assumes pin < 100.
+// Your pins are 35..42 so you're safe.
+bool buttonPressed(int pin) {
+  static unsigned long lastTime[100];
+  static bool lastState[100];
+
+  // INPUT_PULLUP: pressed reads LOW, so invert it here
+  bool reading = !digitalRead(pin);
+  unsigned long now = millis();
+
+  // If state changed AND enough time passed -> accept it
+  if (reading != lastState[pin] && now - lastTime[pin] > 100) {
+    lastTime[pin] = now;
+    lastState[pin] = reading;
+    return reading; // returns true only on a valid press transition
+  }
+  return false;
+}
+
+// ============================================================
+//                      WIN SEQUENCE
+// ============================================================
+void winSequence() {
+  Serial.println("All targets found! You win!");
+}
+
