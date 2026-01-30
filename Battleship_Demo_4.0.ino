@@ -10,22 +10,22 @@
 
 
 // -------- PLAYER 1 PINS --------
-#define P1_GREEN_BTN   9
-#define P1_RED_BTN     10
-#define P1_GREEN_LED   11
-#define P1_RED_LED     12
-#define P1_POT_ROW     4
-#define P1_POT_COL     5
-#define P1_LED_PIN     15   // NeoPixel data pin
+#define P1_GREEN_BTN   42
+#define P1_RED_BTN     41
+#define P1_GREEN_LED   40
+#define P1_RED_LED     39
+#define P1_POT_ROW     6
+#define P1_POT_COL     7
+#define P1_LED_PIN     4   // NeoPixel data pin
 
 // -------- PLAYER 2 PINS --------
-#define P2_GREEN_BTN   39
-#define P2_RED_BTN     40
-#define P2_GREEN_LED   41
-#define P2_RED_LED     42
-#define P2_POT_ROW     6
-#define P2_POT_COL     7
-#define P2_LED_PIN     16
+#define P2_GREEN_BTN   38
+#define P2_RED_BTN     37
+#define P2_GREEN_LED   36
+#define P2_RED_LED     35
+#define P2_POT_ROW     9
+#define P2_POT_COL     10
+#define P2_LED_PIN     1
 
 
 enum Player {
@@ -205,8 +205,6 @@ void loop() {
   }
   preInputRow = pl.inputRow;
   preInputCol = pl.inputCol;
-  Serial.println(preInputRow);
-  Serial.println(preInputCol);
 }
 
 void endTurn() {
