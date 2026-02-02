@@ -16,7 +16,8 @@
 #define P1_RED_LED     39
 #define P1_POT_ROW     6
 #define P1_POT_COL     7
-#define P1_LED_PIN     4   // NeoPixel data pin
+#define P1_LED_PIN1     4   // NeoPixel data pin
+#define P1_LED_PIN2     8
 
 // -------- PLAYER 2 PINS --------
 #define P2_GREEN_BTN   38
@@ -25,7 +26,8 @@
 #define P2_RED_LED     35
 #define P2_POT_ROW     9
 #define P2_POT_COL     10
-#define P2_LED_PIN     1
+#define P2_LED_PIN1     1
+#define P2_LED_PIN2     2
 
 
 enum Player {
@@ -60,7 +62,8 @@ void initrandomMatrix(Board &b);
 
 
 struct PlayerHW {
-  Adafruit_NeoPixel strip;
+  Adafruit_NeoPixel strip1;
+  Adafruit_NeoPixel strip2;
   int potRowPin;
   int potColPin;
   int greenBtn;
@@ -71,19 +74,22 @@ struct PlayerHW {
   int inputRow;
   int inputCol;
   bool aimingActive;
-  uint32_t previousColors[LED_COUNT];
+  uint32_t previousColors1[LED_COUNT];
+  uint32_t previousColors2[LED_COUNT];
 };
 
 PlayerHW players[2] = {
   {
-    Adafruit_NeoPixel(LED_COUNT, P1_LED_PIN, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(LED_COUNT, P1_LED_PIN1, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(LED_COUNT, P1_LED_PIN2, NEO_GRB + NEO_KHZ800),
     P1_POT_ROW, P1_POT_COL,
     P1_GREEN_BTN, P1_RED_BTN,
     P1_GREEN_LED, P1_RED_LED,
     -1, -1, false
   },
   {
-    Adafruit_NeoPixel(LED_COUNT, P2_LED_PIN, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(LED_COUNT, P2_LED_PIN1, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(LED_COUNT, P2_LED_PIN2, NEO_GRB + NEO_KHZ800),
     P2_POT_ROW, P2_POT_COL,
     P2_GREEN_BTN, P2_RED_BTN,
     P2_GREEN_LED, P2_RED_LED,
@@ -99,6 +105,7 @@ void blinkIndicatorG(PlayerHW &pl);
 void hitLightUp(PlayerHW &pl, int r, int c);
 void missLightUp(PlayerHW &pl, int r, int c);
 bool commitShot(PlayerHW &pl);
+void preaim(PlayerHW &pl);
 
 int y = 0;
 
@@ -125,11 +132,19 @@ void setup() {
   Serial.begin(115200);
 
   for (int p = 0; p < 2; p++) {
-    players[p].strip.begin();
+    players[p].strip1.begin();
+    players[p].strip2.begin();
     for (int i = 0; i < LED_COUNT; i++) {
-      players[p].strip.setPixelColor(i, 0, 0, 255);
+      players[p].strip1.setPixelColor(i, 0, 0, 255);
     }
-    players[p].strip.show();
+    for (int i = 0; i < LED_COUNT; i++) {
+      players[p].strip2.setPixelColor(i, 5, 75, 5);
+    }
+    players[p].strip1.show();
+    players[p].strip2.show();
+    players[p].strip1.setBrightness(255);
+    players[p].strip2.setBrightness(255);
+    saveColors(players[p]);
 
     pinMode(players[p].greenBtn, INPUT_PULLUP);
     pinMode(players[p].redBtn, INPUT_PULLUP);
@@ -170,6 +185,12 @@ void loop() {
         gameState = WAITING_FOR_CONFIRM;
         digitalWrite(pl.greenLED, HIGH);
       }
+      if(pl.inputRow != preInputRow || pl.inputCol != preInputCol){
+        refreshColors(pl);
+        pl.strip1.show();
+        pl.strip2.show();
+      }
+      preaim(pl);
       break;
 
     case WAITING_FOR_CONFIRM:
@@ -179,7 +200,8 @@ void loop() {
         bool hit = commitShot(pl);
         aimingActive = false;
         refreshColors(pl);
-        pl.strip.show();
+        pl.strip1.show();
+        pl.strip2.show();
 
         if (!hit && gameState != GAME_OVER) {
           endTurn();              // miss → switch player
@@ -195,7 +217,8 @@ void loop() {
         gameState = WAITING_FOR_AIM;
         aimingActive = false;
         refreshColors(pl);
-        pl.strip.show();
+        pl.strip1.show();
+        pl.strip2.show();
       }
       break;
 
@@ -255,14 +278,29 @@ void initrandomMatrix(Board &b) {
 
 void saveColors(PlayerHW &pl){
   for ( int i = 0; i < LED_COUNT; i++){
-    pl.previousColors[i] = pl.strip.getPixelColor(i);
+    pl.previousColors1[i] = pl.strip1.getPixelColor(i);
+  }
+  for ( int i = 0; i < LED_COUNT; i++){
+    pl.previousColors2[i] = pl.strip2.getPixelColor(i);
   }
 }
 
 void refreshColors(PlayerHW &pl){
-    for ( int i = 0; i < LED_COUNT; i++){
-    pl.strip.setPixelColor(i, pl.previousColors[i]);
+  for ( int i = 0; i < LED_COUNT; i++){
+    pl.strip1.setPixelColor(i, pl.previousColors1[i]);
   }
+  for ( int i = 0; i < LED_COUNT; i++){
+    pl.strip2.setPixelColor(i, pl.previousColors2[i]);
+  }
+}
+
+void preaim(PlayerHW &pl){
+  int refRow = 0;
+  int refCol = 0;
+  pl.strip2.setPixelColor(indexConvert(pl.inputRow, refCol), 255, 255, 0);
+  pl.strip2.setPixelColor(indexConvert(refRow, pl.inputCol), 255, 255, 0);
+  pl.strip2.show();
+
 }
 
 
@@ -276,9 +314,9 @@ void aiming(PlayerHW &pl){
     aimStep = 0;
     aimMax = max(max(9 - aimCol, aimCol), max(9 - aimRow, aimRow));
     lastAimUpdate = millis();
-    saveColors(pl);
     refreshColors(pl);
-    pl.strip.show();
+    pl.strip1.show();
+    pl.strip2.show();
     return;
   }
 
@@ -287,14 +325,15 @@ void aiming(PlayerHW &pl){
     lastAimUpdate = millis();
 
     refreshColors(pl); // restore base colors before drawing current step
+    pl.strip2.setPixelColor(indexConvert(pl.inputRow, pl.inputCol), 255, 255, 0);
 
     int i = aimMax - aimStep;
-    if (i <= (9 - aimCol)) pl.strip.setPixelColor(indexConvert(aimRow, aimCol + i), 255, 255, 0);
-    if (i <= aimCol)       pl.strip.setPixelColor(indexConvert(aimRow, aimCol - i), 255, 255, 0);
-    if (i <= aimRow)       pl.strip.setPixelColor(indexConvert(aimRow - i, aimCol), 255, 255, 0);
-    if (i <= (9 - aimRow)) pl.strip.setPixelColor(indexConvert(aimRow + i, aimCol), 255, 255, 0);
+    if (i <= (9 - aimCol)) pl.strip2.setPixelColor(indexConvert(aimRow, aimCol + i), 255, 255, 0);
+    if (i <= aimCol)       pl.strip2.setPixelColor(indexConvert(aimRow, aimCol - i), 255, 255, 0);
+    if (i <= aimRow)       pl.strip2.setPixelColor(indexConvert(aimRow - i, aimCol), 255, 255, 0);
+    if (i <= (9 - aimRow)) pl.strip2.setPixelColor(indexConvert(aimRow + i, aimCol), 255, 255, 0);
 
-    pl.strip.show();
+    pl.strip2.show();
 
     aimStep++;
 
@@ -302,7 +341,7 @@ void aiming(PlayerHW &pl){
     if (aimStep > aimMax) {
       refreshColors(pl);
       //pl.strip.setPixelColor(indexConvert(aimRow, aimCol), 255, 255, 0);
-      pl.strip.show();
+      pl.strip2.show();
       aimingActive = false;
     }
   }
@@ -348,7 +387,6 @@ bool commitShot(PlayerHW &pl) {
     enemy.found[pl.inputRow][pl.inputCol] = true;
     enemy.remaining--;
     hitLightUp(pl, pl.inputRow, pl.inputCol);
-
     saveColors(pl);
 
     if (enemy.remaining == 0) {
@@ -368,13 +406,17 @@ bool commitShot(PlayerHW &pl) {
 
 // 8×8 Matrix helpers
 void hitLightUp(PlayerHW &pl, int r, int c) {
-  pl.strip.setPixelColor(indexConvert(r, c), 255, 0, 0);
-  pl.strip.show();
+  pl.strip1.setPixelColor(indexConvert(r, c), 255, 0, 0);
+  pl.strip2.setPixelColor(indexConvert(r, c), 255, 0, 0);
+  pl.strip1.show();
+  pl.strip2.show();
 }
 
 void missLightUp(PlayerHW &pl, int r, int c) {
-  pl.strip.setPixelColor(indexConvert(r, c), 127, 127, 127);
-  pl.strip.show();
+  pl.strip1.setPixelColor(indexConvert(r, c), 127, 127, 127);
+  pl.strip2.setPixelColor(indexConvert(r, c), 127, 127, 127);
+  pl.strip1.show();
+  pl.strip2.show();
 }
 
 int indexConvert(int r, int c){
