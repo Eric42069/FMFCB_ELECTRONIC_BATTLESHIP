@@ -1,3 +1,4 @@
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_NeoPixel.h>
@@ -156,6 +157,12 @@ int aimCol = 0;
 int potVal1 = 0;
 int potVal2 = 0;
 
+const char* Whistle = kPlaylist[0];
+const char* Fire = kPlaylist[1];
+const char* Hit = kPlaylist[2];
+const char* Ping = kPlaylist[3];
+const char* Miss = kPlaylist[4];
+
 void setup() {
   #if defined(__AVR_ATtiny85__) && (F_CPU == 16000000)
   clock_prescale_set(clock_div_1);
@@ -163,7 +170,6 @@ void setup() {
 
   Serial.begin(115200);
   pinMode(POT_PIN, INPUT);
-  analogReadResolution(12);
 
   for (int p = 0; p < 2; p++) {
     players[p].strip1.begin();
@@ -189,13 +195,13 @@ void setup() {
     digitalWrite(players[p].redLED, LOW);
   }
 
-
+  LittleFS.begin();
 
   randomSeed(analogRead(A0));
   initrandomMatrix(boards[0]);
   
   initrandomMatrix(boards[1]);
-  playWav(kPlaylist[1]);
+  playWav(Whistle);
 
 
 }
@@ -231,12 +237,12 @@ void loop() {
       aiming(pl);
       blinkIndicatorR(pl);
       if (red) {
-        bool hit = commitShot(pl);
-        aimingActive = false;
         refreshColors(pl);
         pl.strip1.show();
         pl.strip2.show();
-        playWav(kPlaylist[2]);
+        playWav(Fire);
+        bool hit = commitShot(pl);
+        aimingActive = false;
 
         if (!hit && gameState != GAME_OVER) {
           endTurn();              // miss → switch player
@@ -374,11 +380,10 @@ void aiming(PlayerHW &pl){
 
     // Once done, highlight target and stop animation
     if (aimStep > aimMax) {
-      playWav(kPlaylist[4]);
       refreshColors(pl);
-      //pl.strip.setPixelColor(indexConvert(aimRow, aimCol), 255, 255, 0);
       pl.strip2.show();
       aimingActive = false;
+      playWav(Ping);
     }
   }
 }
@@ -423,7 +428,6 @@ bool commitShot(PlayerHW &pl) {
     enemy.found[pl.inputRow][pl.inputCol] = true;
     enemy.remaining--;
     hitLightUp(pl, pl.inputRow, pl.inputCol);
-    playWav(kPlaylist[3]);
     saveColors(pl);
 
     if (enemy.remaining == 0) {
@@ -434,7 +438,6 @@ bool commitShot(PlayerHW &pl) {
   }
 
   missLightUp(pl, pl.inputRow, pl.inputCol);
-  playWav(kPlaylist[5]);
   saveColors(pl);
   return false;    // MISS
 }
@@ -448,6 +451,7 @@ void hitLightUp(PlayerHW &pl, int r, int c) {
   pl.strip2.setPixelColor(indexConvert(r, c), 255, 0, 0);
   pl.strip1.show();
   pl.strip2.show();
+  playWav(Hit);
 }
 
 void missLightUp(PlayerHW &pl, int r, int c) {
@@ -455,6 +459,8 @@ void missLightUp(PlayerHW &pl, int r, int c) {
   pl.strip2.setPixelColor(indexConvert(r, c), 127, 127, 127);
   pl.strip1.show();
   pl.strip2.show();
+  delay(100);
+  playWav(Miss);
 }
 
 int indexConvert(int r, int c){
@@ -481,8 +487,11 @@ int getPosition(int positionPin){
   else if (sensorValue < 2400) positionValue = 4;
   else if (sensorValue < 2860) positionValue = 3;
   else if (sensorValue < 3380) positionValue = 2;
-  else if (sensorValue < 3880) positionValue = 1;
-  else if (sensorValue > 3880) positionValue = 0;
+  else if (sensorValue < 4050) positionValue = 1;
+  else if (sensorValue > 4051) positionValue = 0;
+
+  Serial.println(sensorValue);
+  Serial.println(positionValue);
 
   return positionValue;
 }
@@ -641,5 +650,6 @@ void winSequence() {
   Serial.println("All targets found! You win!");
 }
 
-
-
+/*
+* xTaskCreatePinnedToCore(function, "function name", 1000, NULL, 1,)
+*/
