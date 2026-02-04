@@ -156,6 +156,12 @@ int aimCol = 0;
 int potVal1 = 0;
 int potVal2 = 0;
 
+const char* Whistle = kPlaylist[0];
+const char* Fire = kPlaylist[1];
+const char* Hit = kPlaylist[2];
+const char* Ping = kPlaylist[3];
+const char* Miss = kPlaylist[4];
+
 void setup() {
   #if defined(__AVR_ATtiny85__) && (F_CPU == 16000000)
   clock_prescale_set(clock_div_1);
@@ -163,7 +169,6 @@ void setup() {
 
   Serial.begin(115200);
   pinMode(POT_PIN, INPUT);
-  analogReadResolution(12);
 
   for (int p = 0; p < 2; p++) {
     players[p].strip1.begin();
@@ -195,7 +200,6 @@ void setup() {
   initrandomMatrix(boards[0]);
   
   initrandomMatrix(boards[1]);
-  const char* Whistle = kPlaylist[0];
   playWav(Whistle);
 
 
@@ -232,6 +236,7 @@ void loop() {
       aiming(pl);
       blinkIndicatorR(pl);
       if (red) {
+        playWav(Fire);
         bool hit = commitShot(pl);
         aimingActive = false;
         refreshColors(pl);
@@ -375,8 +380,8 @@ void aiming(PlayerHW &pl){
     // Once done, highlight target and stop animation
     if (aimStep > aimMax) {
 
+      playWav(Ping);
       refreshColors(pl);
-      //pl.strip.setPixelColor(indexConvert(aimRow, aimCol), 255, 255, 0);
       pl.strip2.show();
       aimingActive = false;
     }
@@ -442,6 +447,7 @@ bool commitShot(PlayerHW &pl) {
 
 // 8×8 Matrix helpers
 void hitLightUp(PlayerHW &pl, int r, int c) {
+  playWav(Hit);
   pl.strip1.setPixelColor(indexConvert(r, c), 255, 0, 0);
   pl.strip2.setPixelColor(indexConvert(r, c), 255, 0, 0);
   pl.strip1.show();
@@ -449,6 +455,7 @@ void hitLightUp(PlayerHW &pl, int r, int c) {
 }
 
 void missLightUp(PlayerHW &pl, int r, int c) {
+  playWav(Miss);
   pl.strip1.setPixelColor(indexConvert(r, c), 127, 127, 127);
   pl.strip2.setPixelColor(indexConvert(r, c), 127, 127, 127);
   pl.strip1.show();
