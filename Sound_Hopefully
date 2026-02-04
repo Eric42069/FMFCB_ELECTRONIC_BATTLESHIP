@@ -189,7 +189,7 @@ void setup() {
     digitalWrite(players[p].redLED, LOW);
   }
 
-
+  LitteFS.begin();
 
   randomSeed(analogRead(A0));
   initrandomMatrix(boards[0]);
