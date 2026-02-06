@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <Adafruit_MCP23X17.h>
 #include <Adafruit_NeoPixel.h>
 #include <LittleFS.h>
 #include "driver/i2s.h"
@@ -9,6 +10,26 @@
 
 // How many NeoPixels are attached to the Arduino?
 #define LED_COUNT 100
+
+//Bus one pins
+#define I2C_SDA0 16
+#define I2C_SCL0 17 //SCK
+//Bus two pins
+#define I2C_SDA1 4
+#define I2C_SCL1 5
+
+#define EMPTY 0
+#define SHIP  1
+#define boardSize 10
+#define maxShips 5
+#define maxShipSize 4
+#define mcpBaseAddress 0x20
+
+Adafruit_MCP23X17 mcp0[8];
+Adafruit_MCP23X17 mcp1[8];
+
+TwoWire I2C_0 = TwoWire(0);
+TwoWire I2C_1 = TwoWire(1);
 
 
 // -------- PLAYER 1 PINS --------
@@ -57,6 +78,31 @@ Player otherPlayer(Player p) {
   return (p == PLAYER_1) ? PLAYER_2 : PLAYER_1;
 }
 
+const byte gpioPinArray[boardSize][boardSize] = {
+  {0,1,2,3,4,5,6,8,9,10},
+  {11,12,13,14,0,1,2,3,4,5},
+  {6,8,9,10,11,12,13,14,0,1},
+  {2,3,4,5,6,8,9,10,11,12},
+  {13,14,0,1,2,3,4,5,6,8},
+  {9,10,11,12,13,14,0,1,2,3},
+  {4,5,6,8,9,10,11,12,13,14},
+  {0,1,2,3,4,5,6,8,9,10},
+  {11,12,13,14,0,1,2,3,4,5},
+  {6,8,9,10,11,12,13,14,0,1}
+};
+
+const byte gpioDeviceArray[boardSize][boardSize]{
+  {0,0,0,0,0,0,0,0,0,0},
+  {0,0,0,0,1,1,1,1,1,1},
+  {1,1,1,1,1,1,1,1,2,2},
+  {2,2,2,2,2,2,2,2,2,2},
+  {2,2,3,3,3,3,3,3,3,3},
+  {3,3,3,3,3,3,4,4,4,4},
+  {4,4,4,4,4,4,4,4,4,4},
+  {5,5,5,5,5,5,5,5,5,5},
+  {5,5,5,5,6,6,6,6,6,6},
+  {6,6,6,6,6,6,6,6,7,7},
+};
 
 struct Board {
   int ships[10][10];
@@ -65,6 +111,8 @@ struct Board {
 };
 
 Board boards[2];
+
+void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]);
 
 void initrandomMatrix(Board &b);
 
@@ -171,6 +219,26 @@ void setup() {
 
   Serial.begin(115200);
   pinMode(POT_PIN, INPUT);
+  I2C_0.begin(I2C_SDA0, I2C_SCL0, 400000); // Set the I2C pins. Enables the pull-up resistors.
+  I2C_1.begin(I2C_SDA1, I2C_SCL1, 400000);
+
+ for(byte i = 0; i < 8; i++){
+    byte address = mcpBaseAddress + i;
+    if(!mcp0[i].begin_I2C(address, &I2C_0)){
+      Serial.print("Failed to initialize MCP at 0x");
+      Serial.println(address, HEX);
+      while(1);
+    }
+  }
+  
+  for(byte i = 0; i < 8; i++){
+    byte address = mcpBaseAddress + i;
+    if(!mcp1[i].begin_I2C(address, &I2C_1)){
+      Serial.print("Failed to initialize MCP at 0x");
+      Serial.println(address, HEX);
+      while(1);
+    }
+  }
 
   for (int p = 0; p < 2; p++) {
     players[p].strip1.begin();
@@ -195,13 +263,19 @@ void setup() {
     digitalWrite(players[p].greenLED, LOW);
     digitalWrite(players[p].redLED, LOW);
   }
+  initilizeGPIOPins();
 
+ 
   LittleFS.begin();
 
   randomSeed(analogRead(A0));
-  initrandomMatrix(boards[0]);
+
+  detectShipPositions(boards[0], mcp0);
+ 
+  detectShipPositions(boards[1], mcp1);
   
-  initrandomMatrix(boards[1]);
+  initrandomMatrix(boards[2]);
+ 
   playWav(Whistle);
 
 
@@ -656,4 +730,102 @@ static bool parseWav(File &f, WavInfo &w) {
 // --- Win sequence --- //
 void winSequence() {
   Serial.println("All targets found! You win!");
+}
+
+void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]){
+  memset(b.ships, 0, sizeof(b.ships));
+  memset(b.found, 0, sizeof(b.found));
+  b.remaining = 0;
+  byte numberOfShips = 0;
+  byte gpioPinActive; //This is the pin that is set LOW.
+  byte gpioPinShort;
+  
+  while(numberOfShips < maxShips){
+    numberOfShips = 0;
+    Serial.print("numberOfShips: ");
+    Serial.println(numberOfShips);
+    for(byte row = 0; row < boardSize; row++){
+      for(byte column = 0; column < boardSize; column++){
+        gpioPinActive = gpioPinArray[row][column];
+        byte activeDevice = gpioDeviceArray[row][column];
+
+        //Drive current pin LOW
+        mcpDevice[activeDevice].pinMode(gpioPinActive, OUTPUT);
+        mcpDevice[activeDevice].digitalWrite(gpioPinActive, LOW);
+        
+        //Horizontal scan
+        for(byte i = 1; i <= maxShipSize && (column + i) < boardSize; i++){
+          byte device = gpioDeviceArray[row][column + i];
+          byte pin = gpioPinArray[row][column + i];
+
+          mcpDevice[device].pinMode(pin, INPUT_PULLUP);
+          gpioPinShort = mcpDevice[device].digitalRead(pin);
+          
+          if(gpioPinShort == LOW && b.ships[row][column + i] == EMPTY){
+            numberOfShips++;
+            
+            for(byte x = column; x <= (column + i); x++){
+              b.ships[row][x] = SHIP; //Should be 1. 5 is for testing
+            }
+          }          
+        }
+
+        //Vertical scan
+        for(byte i = 1; i <= maxShipSize && (row + i) < boardSize; i++){
+          byte device = gpioDeviceArray[row + i][column];
+          byte pin = gpioPinArray[row + i][column];
+
+          mcpDevice[device].pinMode(pin, INPUT_PULLUP);
+          gpioPinShort = mcpDevice[device].digitalRead(pin);
+          
+          if(gpioPinShort == LOW && b.ships[row + i][column] == EMPTY){
+            numberOfShips++;
+            
+            for(byte y = row; y <= (row + i); y++){
+              b.ships[y][column] = SHIP;
+            }
+          }
+        }
+        mcpDevice[activeDevice].digitalWrite(gpioPinActive, HIGH);
+      }
+    }
+    //delay(50);
+  }
+  b.remaining = 17;
+}
+
+void initilizeGPIOPins(){
+  byte gpioPin = 0;
+  byte gpioDevice = 0;
+  //delay(2000);
+  for(byte y = 0; y < boardSize; y++){
+    for(byte x = 0; x < boardSize; x++){
+      mcp0[gpioDevice].pinMode(gpioPinArray[y][x], INPUT_PULLUP);
+      gpioPin = gpioPinArray[y][x];
+      Serial.print("Initialized: ");
+      Serial.print(gpioPin);
+      Serial.print(" on chip: ");
+      Serial.println(gpioDevice);
+      if(gpioPin == 14 && gpioDevice < 7){
+        gpioDevice++;
+      }
+    }
+  }
+
+  gpioDevice = 0;
+  
+  for(byte y = 0; y < boardSize; y++){
+    for(byte x = 0; x < boardSize; x++){
+      mcp1[gpioDevice].pinMode(gpioPinArray[y][x], INPUT_PULLUP);
+      gpioPin = gpioPinArray[y][x];
+      Serial.print("Player 2: ");
+      Serial.print("Initialized: ");
+      Serial.print(gpioPin);
+      Serial.print(" on chip: ");
+      Serial.println(gpioDevice);
+      if(gpioPin == 14 && gpioDevice < 7){
+        gpioDevice++;
+      }
+    }
+  }
 }
