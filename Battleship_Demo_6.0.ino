@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <Adafruit_MCP23X17.h>
 #include <Adafruit_NeoPixel.h>
 #include <LittleFS.h>
 #include "driver/i2s.h"
@@ -10,6 +9,7 @@
 
 // How many NeoPixels are attached to the Arduino?
 #define LED_COUNT 100
+
 
 // -------- PLAYER 1 PINS --------
 #define P1_GREEN_BTN   42
@@ -37,33 +37,6 @@ static const int I2S_LRC  = 13;
 static const int I2S_DOUT = 14;
 static const int POT_PIN  = 5;
 
-//Bus one pins
-#define I2C_SDA0 16
-#define I2C_SCL0 17 //SCK
-//Bus two pins
-#define I2C_SDA1 4
-#define I2C_SCL1 5
-
-#define EMPTY 0
-#define SHIP  1
-#define boardSize 10
-#define maxShips 5
-#define maxShipSize 4
-#define mcpBaseAddress 0x20
-
-Adafruit_MCP23X17 mcp0[8];
-Adafruit_MCP23X17 mcp1[8];
-
-TwoWire I2C_0 = TwoWire(0);
-TwoWire I2C_1 = TwoWire(1);
-
-struct Board {
-  int ships[boardSize][boardSize];
-  bool found[boardSize][boardSize];
-  int remaining;
-};
-
-Board boards[3];
 
 enum Player {
   PLAYER_1 = 0,
@@ -84,35 +57,17 @@ Player otherPlayer(Player p) {
   return (p == PLAYER_1) ? PLAYER_2 : PLAYER_1;
 }
 
-const byte gpioPinArray[boardSize][boardSize] = {
-  {0,1,2,3,4,5,6,8,9,10},
-  {11,12,13,14,0,1,2,3,4,5},
-  {6,8,9,10,11,12,13,14,0,1},
-  {2,3,4,5,6,8,9,10,11,12},
-  {13,14,0,1,2,3,4,5,6,8},
-  {9,10,11,12,13,14,0,1,2,3},
-  {4,5,6,8,9,10,11,12,13,14},
-  {0,1,2,3,4,5,6,8,9,10},
-  {11,12,13,14,0,1,2,3,4,5},
-  {6,8,9,10,11,12,13,14,0,1}
+
+struct Board {
+  int ships[10][10];
+  bool found[10][10];
+  int remaining;
 };
 
-const byte gpioDeviceArray[boardSize][boardSize]{
-  {0,0,0,0,0,0,0,0,0,0},
-  {0,0,0,0,1,1,1,1,1,1},
-  {1,1,1,1,1,1,1,1,2,2},
-  {2,2,2,2,2,2,2,2,2,2},
-  {2,2,3,3,3,3,3,3,3,3},
-  {3,3,3,3,3,3,4,4,4,4},
-  {4,4,4,4,4,4,4,4,4,4},
-  {5,5,5,5,5,5,5,5,5,5},
-  {5,5,5,5,6,6,6,6,6,6},
-  {6,6,6,6,6,6,6,6,7,7},
-};
-
-void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]);
+Board boards[2];
 
 void initrandomMatrix(Board &b);
+
 
 struct PlayerHW {
   Adafruit_NeoPixel strip1;
@@ -201,34 +156,21 @@ int aimCol = 0;
 int potVal1 = 0;
 int potVal2 = 0;
 
+int sensorValue = 0;
+
+const char* Whistle = kPlaylist[0];
+const char* Fire = kPlaylist[1];
+const char* Hit = kPlaylist[2];
+const char* Ping = kPlaylist[3];
+const char* Miss = kPlaylist[4];
+
 void setup() {
   #if defined(__AVR_ATtiny85__) && (F_CPU == 16000000)
   clock_prescale_set(clock_div_1);
 #endif
 
   Serial.begin(115200);
-  I2C_0.begin(I2C_SDA0, I2C_SCL0, 400000); // Set the I2C pins. Enables the pull-up resistors.
-  I2C_1.begin(I2C_SDA1, I2C_SCL1, 400000);
   pinMode(POT_PIN, INPUT);
-  analogReadResolution(12);
-
-  for(byte i = 0; i < 8; i++){
-    byte address = mcpBaseAddress + i;
-    if(!mcp0[i].begin_I2C(address, &I2C_0)){
-      Serial.print("Failed to initialize MCP at 0x");
-      Serial.println(address, HEX);
-      while(1);
-    }
-  }
-  
-  for(byte i = 0; i < 8; i++){
-    byte address = mcpBaseAddress + i;
-    if(!mcp1[i].begin_I2C(address, &I2C_1)){
-      Serial.print("Failed to initialize MCP at 0x");
-      Serial.println(address, HEX);
-      while(1);
-    }
-  }
 
   for (int p = 0; p < 2; p++) {
     players[p].strip1.begin();
@@ -254,15 +196,15 @@ void setup() {
     digitalWrite(players[p].redLED, LOW);
   }
 
-  initilizeGPIOPins();
-  detectShipPositions(boards[0], mcp0);
-  detectShipPositions(boards[1], mcp1);
+  LittleFS.begin();
 
   randomSeed(analogRead(A0));
   initrandomMatrix(boards[0]);
   
   initrandomMatrix(boards[1]);
-  playWav(kPlaylist[1]);
+  playWav(Whistle);
+
+
 }
 
 void loop() {
@@ -270,6 +212,9 @@ void loop() {
   PlayerHW &pl = players[activePlayer];
   pl.inputRow = getPosition(pl.potRowPin);
   pl.inputCol = getPosition(pl.potColPin);
+
+  
+
 
 
   bool green = buttonPressed(pl.greenBtn);
@@ -296,12 +241,12 @@ void loop() {
       aiming(pl);
       blinkIndicatorR(pl);
       if (red) {
-        bool hit = commitShot(pl);
-        aimingActive = false;
         refreshColors(pl);
         pl.strip1.show();
         pl.strip2.show();
-        playWav(kPlaylist[2]);
+        playWav(Fire);
+        bool hit = commitShot(pl);
+        aimingActive = false;
 
         if (!hit && gameState != GAME_OVER) {
           endTurn();              // miss → switch player
@@ -313,14 +258,14 @@ void loop() {
           digitalWrite(pl.greenLED, LOW);
         }
       }
-      if(pl.inputRow != preInputRow || pl.inputCol != preInputCol){
-        gameState = WAITING_FOR_AIM;
-        aimingActive = false;
-        refreshColors(pl);
-        pl.strip1.show();
-        pl.strip2.show();
-      }
-      break;
+        if(pl.inputRow != preInputRow || pl.inputCol != preInputCol){
+          gameState = WAITING_FOR_AIM;
+          aimingActive = false;
+          refreshColors(pl);
+          pl.strip1.show();
+          pl.strip2.show();
+        }
+    break;
 
     case GAME_OVER:
       winSequence();
@@ -421,7 +366,7 @@ void aiming(PlayerHW &pl){
   }
 
   // Update animation step (every 50 ms)
-  if (millis() - lastAimUpdate >= 50) {
+  if (millis() - lastAimUpdate >= 80) {
     lastAimUpdate = millis();
 
     refreshColors(pl); // restore base colors before drawing current step
@@ -439,11 +384,10 @@ void aiming(PlayerHW &pl){
 
     // Once done, highlight target and stop animation
     if (aimStep > aimMax) {
-      playWav(kPlaylist[4]);
       refreshColors(pl);
-      //pl.strip.setPixelColor(indexConvert(aimRow, aimCol), 255, 255, 0);
       pl.strip2.show();
       aimingActive = false;
+      playWav(Ping);   
     }
   }
 }
@@ -488,7 +432,7 @@ bool commitShot(PlayerHW &pl) {
     enemy.found[pl.inputRow][pl.inputCol] = true;
     enemy.remaining--;
     hitLightUp(pl, pl.inputRow, pl.inputCol);
-    playWav(kPlaylist[3]);
+    Serial.println(enemy.remaining);
     saveColors(pl);
 
     if (enemy.remaining == 0) {
@@ -499,7 +443,6 @@ bool commitShot(PlayerHW &pl) {
   }
 
   missLightUp(pl, pl.inputRow, pl.inputCol);
-  playWav(kPlaylist[5]);
   saveColors(pl);
   return false;    // MISS
 }
@@ -513,6 +456,7 @@ void hitLightUp(PlayerHW &pl, int r, int c) {
   pl.strip2.setPixelColor(indexConvert(r, c), 255, 0, 0);
   pl.strip1.show();
   pl.strip2.show();
+  playWav(Hit);
 }
 
 void missLightUp(PlayerHW &pl, int r, int c) {
@@ -520,6 +464,8 @@ void missLightUp(PlayerHW &pl, int r, int c) {
   pl.strip2.setPixelColor(indexConvert(r, c), 127, 127, 127);
   pl.strip1.show();
   pl.strip2.show();
+  delay(100);
+  playWav(Miss);
 }
 
 int indexConvert(int r, int c){
@@ -534,9 +480,15 @@ int indexConvert(int r, int c){
 
 int getPosition(int positionPin){
     // Read the analog value (0-4095 on ESP32 ADC)
-  int positionValue = 0;  
-  int sensorValue = analogRead(positionPin);
-  
+  int positionValue = 0;
+  int readValue = 0;
+  sensorValue = 0;
+
+  for(int i = 0; i < 5; i++){
+  readValue += analogRead(positionPin);
+  }
+  sensorValue = readValue/5;
+
   // Map the value to a specific position (adjust ranges based on your resistor values)
   if (sensorValue < 210) positionValue = 9;
   else if (sensorValue < 635) positionValue = 8;
@@ -546,8 +498,8 @@ int getPosition(int positionPin){
   else if (sensorValue < 2400) positionValue = 4;
   else if (sensorValue < 2860) positionValue = 3;
   else if (sensorValue < 3380) positionValue = 2;
-  else if (sensorValue < 3880) positionValue = 1;
-  else if (sensorValue > 3880) positionValue = 0;
+  else if (sensorValue < 4050) positionValue = 1;
+  else if (sensorValue > 4051) positionValue = 0;
 
   return positionValue;
 }
@@ -704,102 +656,4 @@ static bool parseWav(File &f, WavInfo &w) {
 // --- Win sequence --- //
 void winSequence() {
   Serial.println("All targets found! You win!");
-}
-
-void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]){
-  memset(b.ships, 0, sizeof(b.ships));
-  memset(b.found, 0, sizeof(b.found));
-  b.remaining = 0;
-  byte numberOfShips = 0;
-  byte gpioPinActive; //This is the pin that is set LOW.
-  byte gpioPinShort;
-  
-  while(numberOfShips < maxShips){
-    numberOfShips = 0;
-    Serial.print("numberOfShips: ");
-    Serial.println(numberOfShips);
-    for(byte row = 0; row < boardSize; row++){
-      for(byte column = 0; column < boardSize; column++){
-        gpioPinActive = gpioPinArray[row][column];
-        byte activeDevice = gpioDeviceArray[row][column];
-
-        //Drive current pin LOW
-        mcpDevice[activeDevice].pinMode(gpioPinActive, OUTPUT);
-        mcpDevice[activeDevice].digitalWrite(gpioPinActive, LOW);
-        
-        //Horizontal scan
-        for(byte i = 1; i <= maxShipSize && (column + i) < boardSize; i++){
-          byte device = gpioDeviceArray[row][column + i];
-          byte pin = gpioPinArray[row][column + i];
-
-          mcpDevice[device].pinMode(pin, INPUT_PULLUP);
-          gpioPinShort = mcpDevice[device].digitalRead(pin);
-          
-          if(gpioPinShort == LOW && b.ships[row][column + i] == EMPTY){
-            numberOfShips++;
-            
-            for(byte x = column; x <= (column + i); x++){
-              b.ships[row][x] = SHIP; //Should be 1. 5 is for testing
-            }
-          }          
-        }
-
-        //Vertical scan
-        for(byte i = 1; i <= maxShipSize && (row + i) < boardSize; i++){
-          byte device = gpioDeviceArray[row + i][column];
-          byte pin = gpioPinArray[row + i][column];
-
-          mcpDevice[device].pinMode(pin, INPUT_PULLUP);
-          gpioPinShort = mcpDevice[device].digitalRead(pin);
-          
-          if(gpioPinShort == LOW && b.ships[row + i][column] == EMPTY){
-            numberOfShips++;
-            
-            for(byte y = row; y <= (row + i); y++){
-              b.ships[y][column] = SHIP;
-            }
-          }
-        }
-        mcpDevice[activeDevice].digitalWrite(gpioPinActive, HIGH);
-      }
-    }
-    //delay(50);
-  }
-  b.remaining = 17;
-}
-
-void initilizeGPIOPins(){
-  byte gpioPin = 0;
-  byte gpioDevice = 0;
-  //delay(2000);
-  for(byte y = 0; y < boardSize; y++){
-    for(byte x = 0; x < boardSize; x++){
-      mcp0[gpioDevice].pinMode(gpioPinArray[y][x], INPUT_PULLUP);
-      gpioPin = gpioPinArray[y][x];
-      Serial.print("Initialized: ");
-      Serial.print(gpioPin);
-      Serial.print(" on chip: ");
-      Serial.println(gpioDevice);
-      if(gpioPin == 14 && gpioDevice < 7){
-        gpioDevice++;
-      }
-    }
-  }
-
-  gpioDevice = 0;
-  
-  for(byte y = 0; y < boardSize; y++){
-    for(byte x = 0; x < boardSize; x++){
-      mcp1[gpioDevice].pinMode(gpioPinArray[y][x], INPUT_PULLUP);
-      gpioPin = gpioPinArray[y][x];
-      Serial.print("Player 2: ");
-      Serial.print("Initialized: ");
-      Serial.print(gpioPin);
-      Serial.print(" on chip: ");
-      Serial.println(gpioDevice);
-      if(gpioPin == 14 && gpioDevice < 7){
-        gpioDevice++;
-      }
-    }
-  }
 }
