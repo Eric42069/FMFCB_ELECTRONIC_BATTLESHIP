@@ -1,4 +1,3 @@
-
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_NeoPixel.h>
@@ -157,6 +156,8 @@ int aimCol = 0;
 int potVal1 = 0;
 int potVal2 = 0;
 
+int sensorValue = 0;
+
 const char* Whistle = kPlaylist[0];
 const char* Fire = kPlaylist[1];
 const char* Hit = kPlaylist[2];
@@ -212,6 +213,9 @@ void loop() {
   pl.inputRow = getPosition(pl.potRowPin);
   pl.inputCol = getPosition(pl.potColPin);
 
+  
+
+
 
   bool green = buttonPressed(pl.greenBtn);
 
@@ -254,14 +258,14 @@ void loop() {
           digitalWrite(pl.greenLED, LOW);
         }
       }
-      if(pl.inputRow != preInputRow || pl.inputCol != preInputCol){
-        gameState = WAITING_FOR_AIM;
-        aimingActive = false;
-        refreshColors(pl);
-        pl.strip1.show();
-        pl.strip2.show();
-      }
-      break;
+        if(pl.inputRow != preInputRow || pl.inputCol != preInputCol){
+          gameState = WAITING_FOR_AIM;
+          aimingActive = false;
+          refreshColors(pl);
+          pl.strip1.show();
+          pl.strip2.show();
+        }
+    break;
 
     case GAME_OVER:
       winSequence();
@@ -362,7 +366,7 @@ void aiming(PlayerHW &pl){
   }
 
   // Update animation step (every 50 ms)
-  if (millis() - lastAimUpdate >= 50) {
+  if (millis() - lastAimUpdate >= 80) {
     lastAimUpdate = millis();
 
     refreshColors(pl); // restore base colors before drawing current step
@@ -383,7 +387,7 @@ void aiming(PlayerHW &pl){
       refreshColors(pl);
       pl.strip2.show();
       aimingActive = false;
-      playWav(Ping);
+      playWav(Ping);   
     }
   }
 }
@@ -428,6 +432,7 @@ bool commitShot(PlayerHW &pl) {
     enemy.found[pl.inputRow][pl.inputCol] = true;
     enemy.remaining--;
     hitLightUp(pl, pl.inputRow, pl.inputCol);
+    Serial.println(enemy.remaining);
     saveColors(pl);
 
     if (enemy.remaining == 0) {
@@ -475,9 +480,15 @@ int indexConvert(int r, int c){
 
 int getPosition(int positionPin){
     // Read the analog value (0-4095 on ESP32 ADC)
-  int positionValue = 0;  
-  int sensorValue = analogRead(positionPin);
-  
+  int positionValue = 0;
+  int readValue = 0;
+  sensorValue = 0;
+
+  for(int i = 0; i < 5; i++){
+  readValue += analogRead(positionPin);
+  }
+  sensorValue = readValue/5;
+
   // Map the value to a specific position (adjust ranges based on your resistor values)
   if (sensorValue < 210) positionValue = 9;
   else if (sensorValue < 635) positionValue = 8;
@@ -489,9 +500,6 @@ int getPosition(int positionPin){
   else if (sensorValue < 3380) positionValue = 2;
   else if (sensorValue < 4050) positionValue = 1;
   else if (sensorValue > 4051) positionValue = 0;
-
-  Serial.println(sensorValue);
-  Serial.println(positionValue);
 
   return positionValue;
 }
@@ -649,7 +657,3 @@ static bool parseWav(File &f, WavInfo &w) {
 void winSequence() {
   Serial.println("All targets found! You win!");
 }
-
-/*
-* xTaskCreatePinnedToCore(function, "function name", 1000, NULL, 1,)
-*/
