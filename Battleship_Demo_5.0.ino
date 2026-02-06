@@ -13,10 +13,10 @@
 
 //Bus one pins
 #define I2C_SDA0 16
-#define I2C_SCL0 17 //SCK
+#define I2C_SCL0 15 //SCK
 //Bus two pins
-#define I2C_SDA1 4
-#define I2C_SCL1 5
+#define I2C_SDA1 18
+#define I2C_SCL1 17
 
 #define EMPTY 0
 #define SHIP  1
