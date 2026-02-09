@@ -19,11 +19,17 @@
 #define I2C_SCL1 17
 
 #define EMPTY 0
-#define SHIP  1
+//#define SHIP  1
 #define boardSize 10
 #define maxShips 5
 #define maxShipSize 4
 #define mcpBaseAddress 0x20
+
+#define orca 2
+#define sub 3
+#define AOPS 3
+#define frigate 4
+#define JSS 5
 
 Adafruit_MCP23X17 mcp0[8];
 Adafruit_MCP23X17 mcp1[8];
@@ -106,7 +112,7 @@ const byte gpioDeviceArray[boardSize][boardSize]{
 
 struct Board {
   int ships[10][10];
-  bool found[10][10];
+  bool found[10][10]; // was bool
   int remaining;
 };
 
@@ -160,6 +166,7 @@ static const char* kPlaylist[] = {
   "/audio/explosive-impact-from-afar-2758.wav",
   "/audio/airport-radar-ping-1582.wav",
   "/audio/liquid-bubble-3000.wav",
+  "/audio/target_destoryed.wav",
 };
 
 struct WavInfo;
@@ -213,6 +220,7 @@ const char* Fire = kPlaylist[1];
 const char* Hit = kPlaylist[2];
 const char* Ping = kPlaylist[3];
 const char* Miss = kPlaylist[4];
+const char* Sunk = kPlaylist[5];
 
 void setup() {
   #if defined(__AVR_ATtiny85__) && (F_CPU == 16000000)
@@ -272,7 +280,7 @@ void setup() {
 
   randomSeed(analogRead(A0));
 
-  detectShipPositions(boards[0], mcp0); 
+  detectShipPositions(boards[0], mcp0);
  
   detectShipPositions(boards[1], mcp1);
   
@@ -545,6 +553,8 @@ void blinkIndicatorG(PlayerHW &pl) {
 
 // --- Guess evaluation --- //
 bool commitShot(PlayerHW &pl) {
+  int check = 0;
+  bool shipSunk = true;
 
   if (pl.inputRow < 0 || pl.inputRow > 9 || pl.inputCol < 0 || pl.inputCol > 9)
     return false;
@@ -556,10 +566,28 @@ bool commitShot(PlayerHW &pl) {
 
   refreshColors(pl);
 
-  if (enemy.ships[pl.inputRow][pl.inputCol]) {
+  Serial.print("Enemy.ships: ");
+  Serial.println(enemy.ships[pl.inputRow][pl.inputCol]);
+
+  if (enemy.ships[pl.inputRow][pl.inputCol] != 0 && enemy.ships[pl.inputRow][pl.inputCol] != 1) {
     enemy.found[pl.inputRow][pl.inputCol] = true;
-    enemy.remaining--;
+    check = enemy.ships[pl.inputRow][pl.inputCol];
+    Serial.print("check: ");
+    Serial.println(check);
+    enemy.ships[pl.inputRow][pl.inputCol] = 1;
+    for(byte y = 0; y < boardSize; y++){
+      for(byte x = 0; x < boardSize; x++){
+        if(enemy.ships[y][x] == check){
+          //break;
+          shipSunk = false;
+        }
+      }
+    }
     hitLightUp(pl, pl.inputRow, pl.inputCol);
+    if(shipSunk == true){
+      playWav(Sunk);
+    }
+    enemy.remaining--;
     Serial.println(enemy.remaining);
     saveColors(pl);
 
@@ -794,6 +822,13 @@ void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]){
   byte numberOfShips = 0;
   byte gpioPinActive; //This is the pin that is set LOW.
   byte gpioPinShort;
+  bool firstThree = false;
+
+  for(byte y = 0; y < boardSize; y++){
+    for(byte x = 0; x < boardSize; x++){
+      b.ships[y][x] = 0;
+    }
+  }
   
   while(numberOfShips < maxShips){
     Serial.print("numberOfShips: ");
@@ -819,11 +854,22 @@ void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]){
             numberOfShips++;
             
             for(byte x = column; x <= (column + i); x++){
-              b.ships[row][x] = SHIP; //Should be 1. 5 is for testing
+              if(i == 2 && firstThree == false){
+                firstThree = true;
+                for(byte x = column; x <= (column + i); x++){
+                  b.ships[row][x] = 6; //First three ships is set to 6
+                }
+                break;
+              }
+              else{
+                b.ships[row][x] = i + 1; //i should be 2-5.
+              }
+                           
+              //b.ships[row][x] = SHIP;
             }
           }          
         }
-
+        
         //Vertical scan
         for(byte i = 1; i <= maxShipSize && (row + i) < boardSize; i++){
           byte device = gpioDeviceArray[row + i][column];
@@ -836,17 +882,28 @@ void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]){
             numberOfShips++;
             
             for(byte y = row; y <= (row + i); y++){
-              b.ships[y][column] = SHIP;
+              if(i == 2 && firstThree == false){
+                firstThree = true;
+                for(byte y = row; y <= (row + i); y++){
+                  b.ships[y][column] = 6; //First three ships is set to 6
+                }
+                break;
+              }
+              else{
+                b.ships[y][column] = i + 1; //i should be 2-5.
+              }
+              //b.ships[y][column] = SHIP;
             }
           }
         }
         mcpDevice[activeDevice].digitalWrite(gpioPinActive, HIGH);
       }
     }
-    Serial.print("numberOfShips: ");
-    Serial.println(numberOfShips);
+    //Serial.print("numberOfShips: ");
+    //Serial.println(numberOfShips);
     //delay(50);
   }
+  Serial.println(b.ships[9][9]);
   b.remaining = 17;
 }
 
