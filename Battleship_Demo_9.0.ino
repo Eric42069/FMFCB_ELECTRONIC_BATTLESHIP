@@ -1,0 +1,1091 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_MCP23X17.h>
+#include <Adafruit_NeoPixel.h>
+#include <LittleFS.h>
+#include "driver/i2s.h"
+#ifdef __AVR__
+ #include <avr/power.h> // Required for 16 MHz Adafruit Trinket
+#endif
+
+// How many NeoPixels are attached to the Arduino?
+#define LED_COUNT 100
+
+//Bus one pins
+#define I2C_SDA0 16
+#define I2C_SCL0 15 //SCK
+//Bus two pins
+#define I2C_SDA1 18
+#define I2C_SCL1 17
+
+#define EMPTY 0
+#define SHIP  1
+#define boardSize 10
+#define maxShips 5
+#define maxShipSize 4
+#define mcpBaseAddress 0x20
+
+Adafruit_MCP23X17 mcp0[8];
+Adafruit_MCP23X17 mcp1[8];
+
+TwoWire I2C_0 = TwoWire(0);
+TwoWire I2C_1 = TwoWire(1);
+
+
+// -------- PLAYER 1 PINS --------
+#define P1_GREEN_BTN   42
+#define P1_RED_BTN     41
+#define P1_GREEN_LED   40
+#define P1_RED_LED     39
+#define P1_POT_ROW     6
+#define P1_POT_COL     7
+#define P1_LED_PIN1     4   // NeoPixel data pin
+#define P1_LED_PIN2     8
+
+// -------- PLAYER 2 PINS --------
+#define P2_GREEN_BTN   38
+#define P2_RED_BTN     37
+#define P2_GREEN_LED   36
+#define P2_RED_LED     35
+#define P2_POT_ROW     9
+#define P2_POT_COL     10
+#define P2_LED_PIN1     1
+#define P2_LED_PIN2     2
+
+// ===== Pins (ESP32-S3 DevKitC-1) =====
+static const int I2S_BCLK = 12;
+static const int I2S_LRC  = 13;
+static const int I2S_DOUT = 14;
+static const int POT_PIN  = 5;
+
+
+enum Player {
+  PLAYER_1 = 0,
+  PLAYER_2 = 1
+};
+
+enum GameState {
+  WAITING_FOR_AIM,
+  AIMING,
+  WAITING_FOR_CONFIRM,
+  GAME_OVER
+};
+
+Player activePlayer = PLAYER_1;
+GameState gameState = WAITING_FOR_AIM;
+
+Player otherPlayer(Player p) {
+  return (p == PLAYER_1) ? PLAYER_2 : PLAYER_1;
+}
+
+const byte gpioPinArray[boardSize][boardSize] = {
+  {0,1,2,3,4,5,6,8,9,10},
+  {11,12,13,14,0,1,2,3,4,5},
+  {6,8,9,10,11,12,13,14,0,1},
+  {2,3,4,5,6,8,9,10,11,12},
+  {13,14,0,1,2,3,4,5,6,8},
+  {9,10,11,12,13,14,0,1,2,3},
+  {4,5,6,8,9,10,11,12,13,14},
+  {0,1,2,3,4,5,6,8,9,10},
+  {11,12,13,14,0,1,2,3,4,5},
+  {6,8,9,10,11,12,13,14,0,1}
+};
+
+const byte gpioDeviceArray[boardSize][boardSize]{
+  {0,0,0,0,0,0,0,0,0,0},
+  {0,0,0,0,1,1,1,1,1,1},
+  {1,1,1,1,1,1,1,1,2,2},
+  {2,2,2,2,2,2,2,2,2,2},
+  {2,2,3,3,3,3,3,3,3,3},
+  {3,3,3,3,3,3,4,4,4,4},
+  {4,4,4,4,4,4,4,4,4,4},
+  {5,5,5,5,5,5,5,5,5,5},
+  {5,5,5,5,6,6,6,6,6,6},
+  {6,6,6,6,6,6,6,6,7,7},
+};
+
+struct Board {
+  int ships[10][10];
+  bool found[10][10];
+  int remaining;
+};
+
+Board boards[2];
+
+void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]);
+
+void initrandomMatrix(Board &b);
+
+
+struct PlayerHW {
+  Adafruit_NeoPixel strip1;
+  Adafruit_NeoPixel strip2;
+  int potRowPin;
+  int potColPin;
+  int greenBtn;
+  int redBtn;
+  int greenLED;
+  int redLED;
+
+  int inputRow;
+  int inputCol;
+  bool aimingActive;
+  uint32_t previousColors1[LED_COUNT];
+  uint32_t previousColors2[LED_COUNT];
+};
+
+PlayerHW players[2] = {
+  {
+    Adafruit_NeoPixel(LED_COUNT, P1_LED_PIN1, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(LED_COUNT, P1_LED_PIN2, NEO_GRB + NEO_KHZ800),
+    P1_POT_ROW, P1_POT_COL,
+    P1_GREEN_BTN, P1_RED_BTN,
+    P1_GREEN_LED, P1_RED_LED,
+    -1, -1, false
+  },
+  {
+    Adafruit_NeoPixel(LED_COUNT, P2_LED_PIN1, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(LED_COUNT, P2_LED_PIN2, NEO_GRB + NEO_KHZ800),
+    P2_POT_ROW, P2_POT_COL,
+    P2_GREEN_BTN, P2_RED_BTN,
+    P2_GREEN_LED, P2_RED_LED,
+    -1, -1, false
+  }
+};
+
+// ===== Playlist (match your uploaded names exactly) =====
+static const char* kPlaylist[] = {
+  "/audio/pipes.wav",
+  "/audio/fire-woosh-1348.wav",
+  "/audio/explosive-impact-from-afar-2758.wav",
+  "/audio/airport-radar-ping-1582.wav",
+  "/audio/liquid-bubble-3000.wav",
+};
+
+struct WavInfo;
+static bool parseWav(File &f, WavInfo &w);
+
+// ===== WAV parsing =====
+struct WavInfo {
+  uint32_t sampleRate = 0;
+  uint16_t numChannels = 0;
+  uint16_t bitsPerSample = 0;
+  uint32_t dataOffset = 0;
+  uint32_t dataSize = 0;
+};
+
+// ===== I2S =====
+static uint32_t g_rate = 0;
+
+void refreshColors(PlayerHW &pl);
+void saveColors(PlayerHW &pl);
+void aiming(PlayerHW &pl);
+void blinkIndicatorR(PlayerHW &pl);
+void blinkIndicatorG(PlayerHW &pl);
+void hitLightUp(PlayerHW &pl, int r, int c);
+void missLightUp(PlayerHW &pl, int r, int c);
+bool commitShot(PlayerHW &pl);
+void preaim(PlayerHW &pl);
+
+int y = 0;
+
+// User inputs
+int preInputRow = -1;
+int preInputCol = -1;
+char displayRow;
+int displayCol;
+
+bool aimingActive = false;
+unsigned long lastAimUpdate = 0;
+int aimStep = 0;
+int aimMax = 0;
+int aimRow = 0;
+int aimCol = 0;
+int potVal1 = 0;
+int potVal2 = 0;
+uint8_t brightness = 0;
+float volume = 0;
+bool singlePlayer = false;
+
+int sensorValue = 0;
+
+// --- Ocean animation state ---
+bool oceanActive = false;
+unsigned long lastOceanUpdate = 0;
+float oceanTime = 0.0;
+int storm = 0;
+
+// --- Ripple animation state ---
+bool rippleActive = false;
+unsigned long lastRippleUpdate = 0;
+
+int rippleRow = 0;
+int rippleCol = 0;
+
+float rippleRadius = 0.0;
+float rippleStrength = 1.0;
+
+const char* Whistle = kPlaylist[0];
+const char* Fire = kPlaylist[1];
+const char* Hit = kPlaylist[2];
+const char* Ping = kPlaylist[3];
+const char* Miss = kPlaylist[4];
+
+void setup() {
+  #if defined(__AVR_ATtiny85__) && (F_CPU == 16000000)
+  clock_prescale_set(clock_div_1);
+#endif
+
+  Serial.begin(115200);
+  pinMode(POT_PIN, INPUT);
+  I2C_0.begin(I2C_SDA0, I2C_SCL0, 400000); // Set the I2C pins. Enables the pull-up resistors.
+  I2C_1.begin(I2C_SDA1, I2C_SCL1, 400000);
+
+ for(byte i = 0; i < 8; i++){
+    byte address = mcpBaseAddress + i;
+    if(!mcp0[i].begin_I2C(address, &I2C_0)){
+      Serial.print("Failed to initialize MCP at 0x");
+      Serial.println(address, HEX);
+      while(1);
+    }
+  }
+  
+  for(byte i = 0; i < 8; i++){
+    byte address = mcpBaseAddress + i;
+    if(!mcp1[i].begin_I2C(address, &I2C_1)){
+      Serial.print("Failed to initialize MCP at 0x");
+      Serial.println(address, HEX);
+      while(1);
+    }
+  }
+
+  for (int p = 0; p < 2; p++) {
+    players[p].strip1.begin();
+    players[p].strip2.begin();
+    for (int i = 0; i < LED_COUNT; i++) {
+      players[p].strip1.setPixelColor(i, 0, 0, 255);
+    }
+    for (int i = 0; i < LED_COUNT; i++) {
+      players[p].strip2.setPixelColor(i, 5, 75, 5);
+    }
+    players[p].strip1.setBrightness(255);
+    players[p].strip2.setBrightness(255);
+    players[p].strip1.show();
+    players[p].strip2.show();
+
+    pinMode(players[p].greenBtn, INPUT_PULLUP);
+    pinMode(players[p].redBtn, INPUT_PULLUP);
+    pinMode(players[p].greenLED, OUTPUT);
+    pinMode(players[p].redLED, OUTPUT);
+
+    digitalWrite(players[p].greenLED, LOW);
+    digitalWrite(players[p].redLED, LOW);
+  }
+
+  initilizeGPIOPins();
+ 
+  LittleFS.begin();
+
+  randomSeed(analogRead(A0));
+
+  setVolume();
+
+  setBrightness();
+
+  startOcean();
+
+  detectShipPositions(boards[0], mcp0); 
+ 
+  detectShipPositions(boards[1], mcp1);
+  
+  initrandomMatrix(boards[2]);
+
+  saveColors(players[0]);
+  saveColors(players[1]);
+
+  playWav(Whistle);
+
+  Serial.println("Starting Game");
+
+}
+
+void loop() {
+
+  PlayerHW &pl = players[activePlayer];
+  pl.inputRow = getPosition(pl.potRowPin);
+  pl.inputCol = getPosition(pl.potColPin);
+
+
+  bool green = buttonPressed(pl.greenBtn);
+
+  bool red   = buttonPressed(pl.redBtn);
+
+  switch (gameState) {
+
+    case WAITING_FOR_AIM:
+      blinkIndicatorG(pl);
+      if (green) {
+        gameState = WAITING_FOR_CONFIRM;
+        digitalWrite(pl.greenLED, HIGH);
+      }
+      if(pl.inputRow != preInputRow || pl.inputCol != preInputCol){
+        refreshColors(pl);
+      }
+      preaim(pl);
+      break;
+
+    case WAITING_FOR_CONFIRM:
+      aiming(pl);
+      blinkIndicatorR(pl);
+      if (red) {
+        refreshColors(pl);
+        playWav(Fire);
+        bool hit = commitShot(pl);
+        aimingActive = false;
+
+        if (!hit) {
+          endTurn();              // miss → switch player
+          digitalWrite(pl.redLED, LOW);
+          digitalWrite(pl.greenLED, LOW);
+        } else if(gameState != GAME_OVER) {
+          gameState = WAITING_FOR_AIM;  // hit → same player aims again
+          digitalWrite(pl.redLED, LOW);
+          digitalWrite(pl.greenLED, LOW);
+        }
+      }
+        if(pl.inputRow != preInputRow || pl.inputCol != preInputCol){
+          gameState = WAITING_FOR_AIM;
+          aimingActive = false;
+          refreshColors(pl);
+        }
+    break;
+
+    case GAME_OVER:
+      winSequence();
+      while (true) delay(1000);
+  }
+  preInputRow = pl.inputRow;
+  preInputCol = pl.inputCol;
+  updateOcean();
+  updateRipple();
+  players[0].strip1.show();
+  players[0].strip2.show();
+  players[1].strip1.show();
+  players[1].strip2.show();
+
+}
+
+void endTurn() {
+  aimingActive = false;
+  players[activePlayer].inputRow = -1;
+  players[activePlayer].inputCol = -1;
+  activePlayer = otherPlayer(activePlayer);
+  gameState = WAITING_FOR_AIM;
+}
+
+// --- Matrix Initialization --- //
+void initrandomMatrix(Board &b) {
+  memset(b.ships, 0, sizeof(b.ships));
+  memset(b.found, 0, sizeof(b.found));
+  b.remaining = 0;
+
+  struct Block { int len; };
+  Block blocks[] = {{5}, {4}, {3}, {3}, {2}};
+
+  for (auto &blk : blocks) {
+    bool placed = false;
+    while (!placed) {
+      int len = blk.len;
+      bool horiz = random(2);
+      int line = random(10);
+      int start = random(0, 10 - len);
+
+      bool ok = true;
+      for (int i = 0; i < len; i++) {
+        int r = horiz ? line : start + i;
+        int c = horiz ? start + i : line;
+        if (b.ships[r][c]) { ok = false; break; }
+      }
+      if (!ok) continue;
+
+      for (int i = 0; i < len; i++) {
+        int r = horiz ? line : start + i;
+        int c = horiz ? start + i : line;
+        b.ships[r][c] = 1;
+      }
+      b.remaining += len;
+      placed = true;
+    }
+  }
+}
+
+
+
+void saveColors(PlayerHW &pl){
+  for ( int i = 0; i < LED_COUNT; i++){
+    pl.previousColors1[i] = pl.strip1.getPixelColor(i);
+  }
+  for ( int i = 0; i < LED_COUNT; i++){
+    pl.previousColors2[i] = pl.strip2.getPixelColor(i);
+  }
+}
+
+void refreshColors(PlayerHW &pl){
+  for ( int i = 0; i < LED_COUNT; i++){
+    pl.strip1.setPixelColor(i, pl.previousColors1[i]);
+  }
+  for ( int i = 0; i < LED_COUNT; i++){
+    pl.strip2.setPixelColor(i, pl.previousColors2[i]);
+  }
+}
+
+void preaim(PlayerHW &pl){
+  int refRow = 0;
+  int refCol = 0;
+  pl.strip2.setPixelColor(indexConvert(pl.inputRow, refCol), 255, 255, 0);
+  pl.strip2.setPixelColor(indexConvert(refRow, pl.inputCol), 255, 255, 0);
+}
+
+
+// --- Aiming --- //
+void aiming(PlayerHW &pl){
+  if (!aimingActive) {
+    // Start a new aiming animation
+    aimingActive = true;
+    aimRow = pl.inputRow;
+    aimCol = pl.inputCol;
+    aimStep = 0;
+    aimMax = max(max(9 - aimCol, aimCol), max(9 - aimRow, aimRow));
+    lastAimUpdate = millis();
+    refreshColors(pl);
+    return;
+  }
+
+  // Update animation step (every 50 ms)
+  if (millis() - lastAimUpdate >= 80) {
+    lastAimUpdate = millis();
+
+    refreshColors(pl); // restore base colors before drawing current step
+    pl.strip2.setPixelColor(indexConvert(pl.inputRow, pl.inputCol), 255, 255, 0);
+
+    int i = aimMax - aimStep;
+    if (i <= (9 - aimCol)) pl.strip2.setPixelColor(indexConvert(aimRow, aimCol + i), 255, 255, 0);
+    if (i <= aimCol)       pl.strip2.setPixelColor(indexConvert(aimRow, aimCol - i), 255, 255, 0);
+    if (i <= aimRow)       pl.strip2.setPixelColor(indexConvert(aimRow - i, aimCol), 255, 255, 0);
+    if (i <= (9 - aimRow)) pl.strip2.setPixelColor(indexConvert(aimRow + i, aimCol), 255, 255, 0);
+
+    aimStep++;
+
+    // Once done, highlight target and stop animation
+    if (aimStep > aimMax) {
+      refreshColors(pl);
+      aimingActive = false;
+      playWav(Ping);   
+    }
+  }
+}
+
+
+// --- Red Indicator LED blink --- //
+void blinkIndicatorR(PlayerHW &pl) {
+  static unsigned long rPrevBlink = 0;
+  static bool rStateBlink = false;
+  if (millis() - rPrevBlink > 100) {
+    rPrevBlink = millis();
+    rStateBlink = !rStateBlink;
+    digitalWrite(pl.redLED, rStateBlink);
+  }
+}
+
+// --- Green Indicator LED blink --- //
+void blinkIndicatorG(PlayerHW &pl) {
+  static unsigned long gPrevBlink = 0;
+  static bool gStateBlink = false;
+  if (millis() - gPrevBlink > 100) {
+    gPrevBlink = millis();
+    gStateBlink = !gStateBlink;
+    digitalWrite(pl.greenLED, gStateBlink);
+  }
+}
+
+// --- Guess evaluation --- //
+bool commitShot(PlayerHW &pl) {
+
+  if (pl.inputRow < 0 || pl.inputRow > 9 || pl.inputCol < 0 || pl.inputCol > 9)
+    return false;
+
+  Board &enemy = boards[otherPlayer(activePlayer)];
+
+  if (enemy.found[pl.inputRow][pl.inputCol])
+    return false;
+
+  refreshColors(pl);
+
+  if (enemy.ships[pl.inputRow][pl.inputCol]) {
+    enemy.found[pl.inputRow][pl.inputCol] = true;
+    enemy.remaining--;
+    hitLightUp(pl, pl.inputRow, pl.inputCol);
+    Serial.println(enemy.remaining);
+    saveColors(pl);
+
+    if (enemy.remaining == 0) {
+      gameState = GAME_OVER;
+      winSequence();
+    }
+
+    return true;   // HIT
+  }
+
+  missLightUp(pl, pl.inputRow, pl.inputCol);
+  saveColors(pl);
+  return false;    // MISS
+}
+
+
+
+
+// 8×8 Matrix helpers
+void hitLightUp(PlayerHW &pl, int r, int c) {
+  pl.strip1.setPixelColor(indexConvert(r, c), 255, 0, 0);
+  pl.strip2.setPixelColor(indexConvert(r, c), 255, 0, 0);
+  startRipple(r,c);
+  playWav(Hit);
+}
+
+void missLightUp(PlayerHW &pl, int r, int c) {
+  pl.strip1.setPixelColor(indexConvert(r, c), 127, 127, 127);
+  pl.strip2.setPixelColor(indexConvert(r, c), 127, 127, 127);
+  startRipple(r,c);
+  playWav(Miss);
+}
+
+int indexConvert(int r, int c){
+  int x = 0;
+  if(r % 2 == 0){
+  x = ((r*10) + c);
+  } else {
+  x = ((r*10) + (9-c));
+  }
+  return x;
+}
+
+int getPosition(int positionPin){
+    // Read the analog value (0-4095 on ESP32 ADC)
+  int positionValue = 0;
+  int readValue = 0;
+  sensorValue = 0;
+  int positionAverage = -1;
+
+  while(positionValue != positionAverage){
+    for(int i = 0; i < 5; i++){
+
+      sensorValue = analogRead(positionPin);
+
+
+    // Map the value to a specific position (adjust ranges based on your resistor values)
+      if (sensorValue < 210) positionValue = 9;
+      else if (sensorValue < 635) positionValue = 8;
+      else if (sensorValue < 1070) positionValue = 7;
+      else if (sensorValue < 1510) positionValue = 6;
+      else if (sensorValue < 1960) positionValue = 5;
+      else if (sensorValue < 2400) positionValue = 4;
+      else if (sensorValue < 2860) positionValue = 3;
+      else if (sensorValue < 3380) positionValue = 2;
+      else if (sensorValue < 4050) positionValue = 1;
+      else if (sensorValue > 4051) positionValue = 0;
+
+      positionAverage += positionValue;
+
+    }
+    positionAverage = positionAverage/5;
+  }
+
+  return positionValue;
+}
+
+bool buttonPressed(int pin) {
+  static unsigned long lastTime[100];
+  static bool lastState[100];
+
+  bool reading = !digitalRead(pin);
+  unsigned long now = millis();
+
+  if (reading != lastState[pin] && now - lastTime[pin] > 100) {
+    lastTime[pin] = now;
+    lastState[pin] = reading;
+    return reading;
+  }
+  return false;
+}
+
+// ===== Playback =====
+static bool playWav(const char *path) {
+  File f = LittleFS.open(path, "r");
+  if (!f) { Serial.printf("Missing: %s\n", path); return false; }
+
+  WavInfo w;
+  if (!parseWav(f, w)) {
+    // Helpful: distinguish RIFF vs other format
+    f.seek(0);
+    uint8_t h[4]; f.read(h,4);
+    if (memcmp(h,"RIFF",4)!=0) Serial.printf("Not RIFF: %s\n", path);
+    else Serial.printf("Bad WAV fmt (need mono 16-bit PCM): %s\n", path);
+    f.close();
+    return false;
+  }
+
+  setupI2S(w.sampleRate);
+  f.seek(w.dataOffset);
+
+  uint8_t buf[1024];
+  int16_t out[512]; // 256 frames * 2ch
+  uint32_t left = w.dataSize;
+
+  while (left) {
+    float vol = analogRead(POT_PIN) / 4095.0f;
+
+    int n = f.read(buf, min((uint32_t)sizeof(buf), left));
+    if (n <= 0) break;
+    left -= n;
+
+    int frames = 0;
+    for (int i = 0; i + 1 < n && frames < 256; i += 2) {
+      int16_t s = (int16_t)(buf[i] | (buf[i + 1] << 8));
+      int32_t v = (int32_t)(s * volume);
+      v = constrain(v, -32768, 32767);
+      out[frames * 2]     = (int16_t)v; // L
+      out[frames * 2 + 1] = (int16_t)v; // R (duplicate mono)
+      frames++;
+    }
+
+    size_t written;
+    i2s_write(I2S_NUM_0, out, frames * 2 * sizeof(int16_t), &written, portMAX_DELAY);
+  }
+
+  f.close();
+  return true;
+}
+
+static void setupI2S(uint32_t sampleRate) {
+  if (g_rate == sampleRate && sampleRate != 0) return;
+  g_rate = sampleRate;
+
+  i2s_driver_uninstall(I2S_NUM_0);
+
+  i2s_config_t cfg = {};
+  cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+  cfg.sample_rate = sampleRate;
+  cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
+  cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;     // we will duplicate mono to L/R
+  cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+  cfg.dma_buf_count = 8;
+  cfg.dma_buf_len = 256;
+  cfg.use_apll = false;
+  cfg.tx_desc_auto_clear = true;
+
+  i2s_pin_config_t pins = {};
+  pins.bck_io_num = I2S_BCLK;
+  pins.ws_io_num  = I2S_LRC;
+  pins.data_out_num = I2S_DOUT;
+  pins.data_in_num  = I2S_PIN_NO_CHANGE;
+
+  i2s_driver_install(I2S_NUM_0, &cfg, 0, NULL);
+  i2s_set_pin(I2S_NUM_0, &pins);
+  i2s_zero_dma_buffer(I2S_NUM_0);
+}
+
+static uint32_t readLE32(File &f) {
+  uint8_t b[4];
+  if (f.read(b, 4) != 4) return 0;
+  return (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+}
+static uint16_t readLE16(File &f) {
+  uint8_t b[2];
+  if (f.read(b, 2) != 2) return 0;
+  return (uint16_t)b[0] | ((uint16_t)b[1] << 8);
+}
+
+static bool parseWav(File &f, WavInfo &w) {
+  w = WavInfo{};
+  f.seek(0);
+
+  uint8_t id[4];
+  if (f.read(id, 4) != 4 || memcmp(id, "RIFF", 4) != 0) return false;
+  readLE32(f); // file size
+  if (f.read(id, 4) != 4 || memcmp(id, "WAVE", 4) != 0) return false;
+
+  bool gotFmt = false, gotData = false;
+
+  while (f.available()) {
+    if (f.read(id, 4) != 4) break;
+    uint32_t size = readLE32(f);
+
+    if (memcmp(id, "fmt ", 4) == 0) {
+      uint16_t audioFormat = readLE16(f);
+      w.numChannels = readLE16(f);
+      w.sampleRate = readLE32(f);
+      readLE32(f); // byteRate
+      readLE16(f); // blockAlign
+      w.bitsPerSample = readLE16(f);
+
+      // skip any extra fmt bytesg
+      if (size > 16) f.seek(f.position() + (size - 16));
+
+      // Only support PCM, 16-bit, mono
+      if (audioFormat != 1 || w.bitsPerSample != 16 || w.numChannels != 1) return false;
+      gotFmt = true;
+    }
+    else if (memcmp(id, "data", 4) == 0) {
+      w.dataOffset = f.position();
+      w.dataSize = size;
+      gotData = true;
+      break;
+    }
+    else {
+      f.seek(f.position() + size);
+    }
+
+    if (size & 1) f.seek(f.position() + 1); // word align
+  }
+
+  return gotFmt && gotData;
+}
+
+
+// --- Win sequence --- //
+void winSequence() {
+  Serial.println("All targets found! You win!");
+}
+
+void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]){
+  memset(b.ships, 0, sizeof(b.ships));
+  memset(b.found, 0, sizeof(b.found));
+  b.remaining = 0;
+  byte numberOfShips = 0;
+  byte gpioPinActive; //This is the pin that is set LOW.
+  byte gpioPinShort;
+  
+  while(numberOfShips < maxShips){
+    Serial.print("numberOfShips: ");
+    Serial.println(numberOfShips);
+    for(byte row = 0; row < boardSize; row++){
+      for(byte column = 0; column < boardSize; column++){
+        gpioPinActive = gpioPinArray[row][column];
+        byte activeDevice = gpioDeviceArray[row][column];
+
+        //Drive current pin LOW
+        mcpDevice[activeDevice].pinMode(gpioPinActive, OUTPUT);
+        mcpDevice[activeDevice].digitalWrite(gpioPinActive, LOW);
+        
+        //Horizontal scan
+        for(byte i = 1; i <= maxShipSize && (column + i) < boardSize; i++){
+          byte device = gpioDeviceArray[row][column + i];
+          byte pin = gpioPinArray[row][column + i];
+
+          mcpDevice[device].pinMode(pin, INPUT_PULLUP);
+          gpioPinShort = mcpDevice[device].digitalRead(pin);
+          
+          if(gpioPinShort == LOW && b.ships[row][column + i] == EMPTY){
+            numberOfShips++;
+            
+            for(byte x = column; x <= (column + i); x++){
+              b.ships[row][x] = SHIP; //Should be 1. 5 is for testing
+            }
+          }          
+        }
+
+        //Vertical scan
+        for(byte i = 1; i <= maxShipSize && (row + i) < boardSize; i++){
+          byte device = gpioDeviceArray[row + i][column];
+          byte pin = gpioPinArray[row + i][column];
+
+          mcpDevice[device].pinMode(pin, INPUT_PULLUP);
+          gpioPinShort = mcpDevice[device].digitalRead(pin);
+          
+          if(gpioPinShort == LOW && b.ships[row + i][column] == EMPTY){
+            numberOfShips++;
+            
+            for(byte y = row; y <= (row + i); y++){
+              b.ships[y][column] = SHIP;
+            }
+          }
+        }
+        mcpDevice[activeDevice].digitalWrite(gpioPinActive, HIGH);
+      }
+    }
+    Serial.print("numberOfShips: ");
+    Serial.println(numberOfShips);
+    //delay(50);
+  }
+  b.remaining = 17;
+}
+
+void initilizeGPIOPins(){
+  byte gpioPin = 0;
+  byte gpioDevice = 0;
+  //delay(2000);
+  for(byte y = 0; y < boardSize; y++){
+    for(byte x = 0; x < boardSize; x++){
+      mcp0[gpioDevice].pinMode(gpioPinArray[y][x], INPUT_PULLUP);
+      gpioPin = gpioPinArray[y][x];
+      Serial.print("Initialized: ");
+      Serial.print(gpioPin);
+      Serial.print(" on chip: ");
+      Serial.println(gpioDevice);
+      if(gpioPin == 14 && gpioDevice < 7){
+        gpioDevice++;
+      }
+    }
+  }
+
+  gpioDevice = 0;
+  
+  for(byte y = 0; y < boardSize; y++){
+    for(byte x = 0; x < boardSize; x++){
+      mcp1[gpioDevice].pinMode(gpioPinArray[y][x], INPUT_PULLUP);
+      gpioPin = gpioPinArray[y][x];
+      Serial.print("Player 2: ");
+      Serial.print("Initialized: ");
+      Serial.print(gpioPin);
+      Serial.print(" on chip: ");
+      Serial.println(gpioDevice);
+      if(gpioPin == 14 && gpioDevice < 7){
+        gpioDevice++;
+      }
+    }
+  }
+}
+
+void startOcean() {
+  oceanActive = true;
+  oceanTime = 0.0;
+  lastOceanUpdate = millis();
+}
+
+void updateOcean() {
+  if (!oceanActive) return;
+
+  // Faster frame rate (~40 FPS)
+  if (millis() - lastOceanUpdate < 25) return;
+  lastOceanUpdate = millis();
+
+  refreshColors(players[0]);
+  refreshColors(players[1]);
+
+  for (int r = 0; r < 10; r++) {
+    for (int c = 0; c < 10; c++) {
+
+      int idx = indexConvert(r, c);
+      uint32_t base = players[0].previousColors1[idx];
+
+      uint8_t br = (base >> 16) & 0xFF;
+      uint8_t bg = (base >> 8) & 0xFF;
+      uint8_t bb = base & 0xFF;
+
+      // Only affect blue tiles
+      if (br == 0 && bg == 0 && bb > 0) {
+
+        // Large slow swells
+        float swell1 = sin(oceanTime * 0.6 + r * 0.7 + c * 0.3);
+        float swell2 = sin(oceanTime * 0.4 + r * 0.2 - c * 0.8);
+
+        // Medium waves
+        float wave1 = sin(oceanTime * 1.3 + r * 1.2);
+        float wave2 = sin(oceanTime * 1.1 + c * 1.4);
+
+        // Small fast ripples
+        float ripple1 = sin(oceanTime * 2.4 + (r + c) * 1.8);
+        float ripple2 = sin(oceanTime * 2.8 + (r - c) * 1.5);
+        float mix;
+
+        // Combine all layers
+        if(storm == 0){
+          mix =
+          swell1 * 0.35 +
+          swell2 * 0.25 +
+          wave1  * 0.20 +
+          wave2  * 0.15 +
+          ripple1 * 0.03 +
+          ripple2 * 0.02;
+        } else if(storm == 1){
+          mix =
+          swell1 * 0.35 +
+          swell2 * 0.25 +
+          wave1  * 0.20 +
+          wave2  * 0.15 +
+          ripple1 * 0.06 +
+          ripple2 * 0.05;
+        }
+
+        // Normalize
+        float level = (mix + 1.2) * 0.45;
+
+        if (level < 0) level = 0;
+        if (level > 1) level = 1;
+
+        // Deep water color
+        int blue = (int)(level * 170) + 40;
+
+        // Foam on strong peaks
+        int foam = 0;
+        if (level > 0.82) {
+          foam = (int)((level - 0.82) * 700);
+          if (foam > 100) foam = 100;
+        }
+
+        // Slight random shimmer
+        foam += random(-5, 6);
+        if (foam < 0) foam = 0;
+
+        // Final color
+        int rCol = foam;
+        int gCol = foam;
+        int bCol = min(255, blue + foam);
+
+        players[0].strip1.setPixelColor(idx, rCol, gCol, bCol);
+        players[1].strip1.setPixelColor(idx, rCol, gCol, bCol);
+      }
+    }
+  }
+
+  // Much faster time flow
+  if(storm == 1){
+    oceanTime += 0.33;
+  } else {
+    oceanTime += 0.14;
+  }
+
+}
+
+void startRipple(int r, int c) {
+  rippleActive = true;
+  rippleRow = r;
+  rippleCol = c;
+
+  rippleRadius = 0.0;
+  rippleStrength = 1.0;
+
+  lastRippleUpdate = millis();
+}
+
+void updateRipple() {
+  if (!rippleActive) return;
+
+  // Frame rate (~40 FPS)
+  if (millis() - lastRippleUpdate < 25) return;
+  lastRippleUpdate = millis();
+
+  for (int r = 0; r < 10; r++) {
+    for (int c = 0; c < 10; c++) {
+
+      int idx = indexConvert(r, c);
+
+      // Read CURRENT pixel (already has ocean)
+      uint32_t cur = players[0].strip1.getPixelColor(idx);
+
+      uint8_t cr = (cur >> 16) & 0xFF;
+      uint8_t cg = (cur >> 8) & 0xFF;
+      uint8_t cb = cur & 0xFF;
+
+      // Distance from impact
+      float dist = sqrt(
+        (r - rippleRow) * (r - rippleRow) +
+        (c - rippleCol) * (c - rippleCol)
+      );
+
+      float band = 0.7;
+      float diff = abs(dist - rippleRadius);
+
+      if (diff < band) {
+
+        float fade = (1.0 - diff / band) * rippleStrength;
+        if (fade < 0) fade = 0;
+
+        int glow = (int)(fade * 180);
+
+        // Add glow on top (not replace)
+        cr = min(255, cr + glow / 2);
+        cg = min(255, cg + glow / 2);
+        cb = min(255, cb + glow);
+
+        players[0].strip1.setPixelColor(idx, cr, cg, cb);
+        players[1].strip1.setPixelColor(idx, cr, cg, cb);
+      }
+    }
+  }
+
+  // Expand & fade
+  rippleRadius += 0.4;
+  rippleStrength *= 0.93;
+
+  if (rippleStrength < 0.05 || rippleRadius > 15) {
+    rippleActive = false;
+  }
+}
+
+void setVolume(){
+  int volPosition = getPosition(P1_POT_COL);
+
+  while(digitalRead(P1_RED_BTN) == HIGH){
+    volume = 1 - (analogRead(P1_POT_COL) / 4095.0f);
+    Serial.println(volume);
+    if(getPosition(P1_POT_COL) != volPosition){
+      playWav(Miss);
+      volPosition = getPosition(P1_POT_COL);
+    }
+  }
+}
+
+void setBrightness(){
+  while(digitalRead(P1_GREEN_BTN) == HIGH){
+    int brightPot = getPosition(P1_POT_ROW);
+    switch (brightPot){
+      case 0:
+      brightness = 0;
+      break;
+      case 1:
+      brightness = 25;
+      break;
+      case 2:
+      brightness = 55;
+      break;
+      case 3:
+      brightness = 80;
+      break;
+      case 4:
+      brightness = 105;
+      break;
+      case 5:
+      brightness = 130;
+      break;
+      case 6:
+      brightness = 155;
+      break;
+      case 7:
+      brightness = 180;      
+      break;
+      case 8:
+      brightness = 205;
+      break;
+      case 9:
+      brightness = 255;
+      break;
+    }
+    Serial.println(brightness);
+
+    for(int p = 0; p < 2; p++){
+      players[p].strip1.clear();
+      players[p].strip2.clear();
+      for (int i = 0; i < LED_COUNT; i++) {
+          players[p].strip1.setPixelColor(i, 0, 0, 255);
+        }
+      for (int i = 0; i < LED_COUNT; i++) {
+          players[p].strip2.setPixelColor(i, 5, 75, 5);
+        }
+      players[p].strip1.setBrightness(brightness);
+      players[p].strip2.setBrightness(brightness);
+      players[p].strip1.show();
+      players[p].strip2.show();
+    }
+  }
+}
