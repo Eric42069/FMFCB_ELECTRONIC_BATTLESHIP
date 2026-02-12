@@ -1,0 +1,491 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_NeoPixel.h>
+#include <IRremote.h>
+
+// How many NeoPixels are attached to the Arduino?
+#define LED_COUNT 100
+
+#define LED_PIN     4
+const int IR_PIN = 40;
+
+Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
+
+int inputRow = 5;
+int inputCol = 5;
+bool aimingActive = false;
+unsigned long lastAimUpdate = 0;
+int aimStep = 0;
+int aimMax = 0;
+int aimRow = 0;
+int aimCol = 0;
+int command = 0;
+int animation = 0;
+int LEDstate = 0;
+int brightness = 250;
+
+// --- Ocean animation state ---
+bool oceanActive = false;
+unsigned long lastOceanUpdate = 0;
+float oceanTime = 0.0;
+int storm = 0;
+
+// --- Ripple animation state ---
+bool rippleActive = false;
+unsigned long lastRippleUpdate = 0;
+
+int rippleRow = 0;
+int rippleCol = 0;
+
+float rippleRadius = 0.0;
+float rippleStrength = 1.0;
+
+
+uint32_t previousColors[LED_COUNT];
+void refreshColors();
+void saveColors();
+
+
+void setup() {
+
+  Serial.begin(115200);
+  IrReceiver.begin(IR_PIN, ENABLE_LED_FEEDBACK);
+  strip.begin();
+  for (int i = 0; i < LED_COUNT; i++) {
+    strip.setPixelColor(i, 0, 0, 255);
+  }
+  strip.show();
+  saveColors();
+  startOcean();
+
+}
+
+void loop() {
+  if (IrReceiver.decode()) { // Check if data is received
+    if (IrReceiver.decodedIRData.protocol == UNKNOWN) {
+      IrReceiver.resume(); // Resume receiving for the next signal
+      return; // Skip this loop iteration
+    }
+    if (IrReceiver.decodedIRData.flags & IRDATA_FLAGS_IS_REPEAT){
+
+    } else {
+      command = IrReceiver.decodedIRData.command;
+      keyRead(command);
+    }
+    IrReceiver.resume(); // Resume receiving for the next signal
+  }
+  delay(100);
+  Serial.println("Animation: ");
+  Serial.println(animation);
+  switch(animation) {
+    case 1:
+      preaim();
+      break;
+
+    case 2:
+      aiming();
+      break;
+
+    case 3:
+      storm = 0;
+      updateOcean();
+      break;
+
+    case 4:
+      storm = 1;
+      updateOcean();
+      break;
+
+    case 0:
+      refreshColors();
+      strip.show();
+      break;    
+  }
+  updateRipple();
+  strip.show();
+}
+
+void keyRead(int command){
+    switch (command) {
+      case 0x45:
+        Serial.println("CH-");
+
+        break;
+
+      case 0x46:
+        Serial.println("CH");
+
+        break;
+
+      case 0x47:
+        Serial.println("CH+");
+
+        break;
+
+      case 0x44:
+        Serial.println("<<");
+        if(animation > 0){
+        animation--;
+        }
+        break;
+
+      case 0x40:
+        Serial.println(">>");
+        if(animation < 4){
+        animation++;
+        }
+        break;
+
+      case 0x43:
+        Serial.println(">||");
+        // TODO: YOUR CONTROL
+        break;
+
+      case 0x7:
+        Serial.println("–");
+        if(brightness > 0){
+          brightness = brightness - 25;
+        }
+        Serial.println("Brightness: ");
+        Serial.println(brightness);
+        strip.setBrightness(brightness);
+        break;
+
+      case 0x15:
+        Serial.println("+");
+        if(brightness < 250){
+          brightness = brightness + 25;
+        }
+        Serial.println("Brightness: ");
+        Serial.println(brightness);
+        strip.setBrightness(brightness);
+        break;
+
+      case 0x9:
+        Serial.println("EQ");
+        // TODO: YOUR CONTROL
+        break;
+
+      case 0x19:
+        Serial.println("100+");
+        // TODO: YOUR CONTROL
+        break;
+
+      case 0xD:
+        Serial.println("200+");
+        // TODO: YOUR CONTROL
+        break;
+
+      case 0x16:
+        Serial.println("0");
+        // TODO: YOUR CONTROL
+        break;
+
+      case 0xC:
+        Serial.println("1");
+        // TODO: YOUR CONTROL
+        break;
+
+      case 0x18:
+        Serial.println("2");
+        if(inputRow > 0){
+          inputRow--;
+          LEDstate = 0;
+        }
+        break;
+
+      case 0x5E:
+        Serial.println("3");
+        // TODO: YOUR CONTROL
+        break;
+
+      case 0x8:
+        Serial.println("4");
+          if(inputCol > 0){
+          inputCol--;
+          LEDstate = 0;
+        }
+        break;
+
+      case 0x1C:
+        Serial.println("5");
+        refreshColors();
+        if(LEDstate == 0){
+          strip.setPixelColor(indexConvert(inputRow, inputCol), 255, 0, 0);
+          startRipple(inputRow, inputCol);
+          LEDstate = 1;
+        } else if (LEDstate == 1){
+          strip.setPixelColor(indexConvert(inputRow, inputCol), 127, 127, 127);
+          startRipple(inputRow, inputCol);
+          LEDstate = 2;
+        }else if (LEDstate == 2){
+          strip.setPixelColor(indexConvert(inputRow, inputCol), 0, 0, 255);
+          LEDstate = 0;
+        }
+        saveColors();
+        break;
+
+      case 0x5A:
+        Serial.println("6");
+          if(inputCol < 9){
+          inputCol++;
+          LEDstate = 0;
+        }
+        break;
+
+      case 0x42:
+        Serial.println("7");
+        // TODO: YOUR CONTROL
+        break;
+
+      case 0x52:
+        Serial.println("8");
+          if(inputRow < 9){
+          inputRow++;
+          LEDstate = 0;
+        }
+        break;
+
+      case 0x4A:
+        Serial.println("9");
+        // TODO: YOUR CONTROL
+        break;
+
+      default:
+        Serial.println("WARNING: undefined command:");
+        break;
+    }
+}
+
+void saveColors(){
+  for ( int i = 0; i < LED_COUNT; i++){
+    previousColors[i] = strip.getPixelColor(i);
+  }
+}
+
+void refreshColors(){
+  for ( int i = 0; i < LED_COUNT; i++){
+    strip.setPixelColor(i, previousColors[i]);
+  }
+}
+
+void preaim(){
+  refreshColors();
+  int refRow = 0;
+  int refCol = 0;
+  strip.setPixelColor(indexConvert(inputRow, refCol), 255, 255, 0);
+  strip.setPixelColor(indexConvert(refRow, inputCol), 255, 255, 0);
+}
+
+void aiming(){
+  if (!aimingActive) {
+    // Start a new aiming animation
+    aimingActive = true;
+    aimRow = inputRow;
+    aimCol = inputCol;
+    aimStep = 0;
+    aimMax = max(max(9 - aimCol, aimCol), max(9 - aimRow, aimRow));
+    lastAimUpdate = millis();
+    refreshColors();
+    return;
+  }
+
+  // Update animation step (every 50 ms)
+  if (millis() - lastAimUpdate >= 50) {
+    lastAimUpdate = millis();
+
+    refreshColors(); // restore base colors before drawing current step
+    strip.setPixelColor(indexConvert(inputRow, inputCol), 255, 255, 0);
+
+    int i = aimMax - aimStep;
+    if (i <= (9 - aimCol)) strip.setPixelColor(indexConvert(aimRow, aimCol + i), 255, 255, 0);
+    if (i <= aimCol)       strip.setPixelColor(indexConvert(aimRow, aimCol - i), 255, 255, 0);
+    if (i <= aimRow)       strip.setPixelColor(indexConvert(aimRow - i, aimCol), 255, 255, 0);
+    if (i <= (9 - aimRow)) strip.setPixelColor(indexConvert(aimRow + i, aimCol), 255, 255, 0);
+
+    aimStep++;
+
+    // Once done, highlight target and stop animation
+    if (aimStep > aimMax) {
+      refreshColors();
+      aimingActive = false;
+    }
+  }
+}
+
+int indexConvert(int r, int c){
+  int x = 0;
+  if(r % 2 == 0){
+  x = ((r*10) + c);
+  } else {
+  x = ((r*10) + (9-c));
+  }
+  return x;
+}
+
+void startOcean() {
+  oceanActive = true;
+  oceanTime = 0.0;
+  lastOceanUpdate = millis();
+  saveColors(); // Store base colors
+}
+
+void updateOcean() {
+  if (!oceanActive) return;
+
+  // Faster frame rate (~40 FPS)
+  if (millis() - lastOceanUpdate < 25) return;
+  lastOceanUpdate = millis();
+
+  refreshColors();
+
+  for (int r = 0; r < 10; r++) {
+    for (int c = 0; c < 10; c++) {
+
+      int idx = indexConvert(r, c);
+      uint32_t base = previousColors[idx];
+
+      uint8_t br = (base >> 16) & 0xFF;
+      uint8_t bg = (base >> 8) & 0xFF;
+      uint8_t bb = base & 0xFF;
+
+      // Only affect blue tiles
+      if (br == 0 && bg == 0 && bb > 0) {
+
+        // Large slow swells
+        float swell1 = sin(oceanTime * 0.6 + r * 0.7 + c * 0.3);
+        float swell2 = sin(oceanTime * 0.4 + r * 0.2 - c * 0.8);
+
+        // Medium waves
+        float wave1 = sin(oceanTime * 1.3 + r * 1.2);
+        float wave2 = sin(oceanTime * 1.1 + c * 1.4);
+
+        // Small fast ripples
+        float ripple1 = sin(oceanTime * 2.4 + (r + c) * 1.8);
+        float ripple2 = sin(oceanTime * 2.8 + (r - c) * 1.5);
+        float mix;
+
+        // Combine all layers
+        if(storm == 0){
+          mix =
+          swell1 * 0.35 +
+          swell2 * 0.25 +
+          wave1  * 0.20 +
+          wave2  * 0.15 +
+          ripple1 * 0.03 +
+          ripple2 * 0.02;
+        } else if(storm == 1){
+          mix =
+          swell1 * 0.35 +
+          swell2 * 0.25 +
+          wave1  * 0.20 +
+          wave2  * 0.15 +
+          ripple1 * 0.06 +
+          ripple2 * 0.05;
+        }
+
+        // Normalize
+        float level = (mix + 1.2) * 0.45;
+
+        if (level < 0) level = 0;
+        if (level > 1) level = 1;
+
+        // Deep water color
+        int blue = (int)(level * 170) + 40;
+
+        // Foam on strong peaks
+        int foam = 0;
+        if (level > 0.82) {
+          foam = (int)((level - 0.82) * 700);
+          if (foam > 100) foam = 100;
+        }
+
+        // Slight random shimmer
+        foam += random(-5, 6);
+        if (foam < 0) foam = 0;
+
+        // Final color
+        int rCol = foam;
+        int gCol = foam;
+        int bCol = min(255, blue + foam);
+
+        strip.setPixelColor(idx, rCol, gCol, bCol);
+      }
+    }
+  }
+
+  // Much faster time flow
+  if(storm == 1){
+    oceanTime += 0.33;
+  } else {
+    oceanTime += 0.14;
+  }
+
+}
+
+void startRipple(int r, int c) {
+  rippleActive = true;
+  rippleRow = r;
+  rippleCol = c;
+
+  rippleRadius = 0.0;
+  rippleStrength = 1.0;
+
+  lastRippleUpdate = millis();
+
+  saveColors(); // Save base colors
+}
+
+void updateRipple() {
+  if (!rippleActive) return;
+
+  // Frame rate (~40 FPS)
+  if (millis() - lastRippleUpdate < 25) return;
+  lastRippleUpdate = millis();
+
+  for (int r = 0; r < 10; r++) {
+    for (int c = 0; c < 10; c++) {
+
+      int idx = indexConvert(r, c);
+
+      // Read CURRENT pixel (already has ocean)
+      uint32_t cur = strip.getPixelColor(idx);
+
+      uint8_t cr = (cur >> 16) & 0xFF;
+      uint8_t cg = (cur >> 8) & 0xFF;
+      uint8_t cb = cur & 0xFF;
+
+      // Distance from impact
+      float dist = sqrt(
+        (r - rippleRow) * (r - rippleRow) +
+        (c - rippleCol) * (c - rippleCol)
+      );
+
+      float band = 0.7;
+      float diff = abs(dist - rippleRadius);
+
+      if (diff < band) {
+
+        float fade = (1.0 - diff / band) * rippleStrength;
+        if (fade < 0) fade = 0;
+
+        int glow = (int)(fade * 180);
+
+        // Add glow on top (not replace)
+        cr = min(255, cr + glow / 2);
+        cg = min(255, cg + glow / 2);
+        cb = min(255, cb + glow);
+
+        strip.setPixelColor(idx, cr, cg, cb);
+      }
+    }
+  }
+
+  // Expand & fade
+  rippleRadius += 0.4;
+  rippleStrength *= 0.93;
+
+  if (rippleStrength < 0.05 || rippleRadius > 15) {
+    rippleActive = false;
+  }
+}
