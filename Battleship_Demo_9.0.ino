@@ -186,6 +186,7 @@ void hitLightUp(PlayerHW &pl, int r, int c);
 void missLightUp(PlayerHW &pl, int r, int c);
 bool commitShot(PlayerHW &pl);
 void preaim(PlayerHW &pl);
+void updateRipple(PlayerHW &pl);
 
 int y = 0;
 
@@ -304,6 +305,8 @@ void setup() {
   saveColors(players[1]);
 
   playWav(Whistle);
+  digitalWrite(P1_RED_LED, LOW);
+  digitalWrite(P1_RED_LED, LOW);
 
   Serial.println("Starting Game");
 
@@ -367,7 +370,7 @@ void loop() {
   preInputRow = pl.inputRow;
   preInputCol = pl.inputCol;
   updateOcean();
-  updateRipple();
+  updateRipple(pl);
   players[0].strip1.show();
   players[0].strip2.show();
   players[1].strip1.show();
@@ -571,15 +574,16 @@ int indexConvert(int r, int c){
 
 int getPosition(int positionPin){
     // Read the analog value (0-4095 on ESP32 ADC)
-  int positionValue = 0;
+  int positionValue = -1;
   int readValue = 0;
   sensorValue = 0;
-  int positionAverage = -1;
+  int positionAverage = 0;
 
   while(positionValue != positionAverage){
     for(int i = 0; i < 5; i++){
 
       sensorValue = analogRead(positionPin);
+      Serial.println(sensorValue);
 
 
     // Map the value to a specific position (adjust ranges based on your resistor values)
@@ -968,7 +972,7 @@ void startRipple(int r, int c) {
   lastRippleUpdate = millis();
 }
 
-void updateRipple() {
+void updateRipple(PlayerHW &pl) {
   if (!rippleActive) return;
 
   // Frame rate (~40 FPS)
@@ -1027,6 +1031,7 @@ void setVolume(){
   int volPosition = getPosition(P1_POT_COL);
 
   while(digitalRead(P1_RED_BTN) == HIGH){
+    blinkIndicatorR(players[0]);
     volume = 1 - (analogRead(P1_POT_COL) / 4095.0f);
     Serial.println(volume);
     if(getPosition(P1_POT_COL) != volPosition){
@@ -1034,10 +1039,12 @@ void setVolume(){
       volPosition = getPosition(P1_POT_COL);
     }
   }
+  digitalWrite(P1_RED_LED, HIGH);
 }
 
 void setBrightness(){
   while(digitalRead(P1_GREEN_BTN) == HIGH){
+    blinkIndicatorG(players[0]);
     int brightPot = getPosition(P1_POT_ROW);
     switch (brightPot){
       case 0:
@@ -1088,4 +1095,5 @@ void setBrightness(){
       players[p].strip2.show();
     }
   }
+  digitalWrite(P1_GREEN_LED, HIGH);
 }
