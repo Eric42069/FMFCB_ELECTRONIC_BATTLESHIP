@@ -187,6 +187,7 @@ void missLightUp(PlayerHW &pl, int r, int c);
 bool commitShot(PlayerHW &pl);
 void preaim(PlayerHW &pl);
 void updateRipple(PlayerHW &pl);
+void startRipple(PlayerHW &pl, int r, int c);
 
 int y = 0;
 
@@ -207,6 +208,7 @@ int potVal2 = 0;
 uint8_t brightness = 0;
 float volume = 0;
 bool singlePlayer = false;
+int ripplePlayer = -1;
 
 int sensorValue = 0;
 
@@ -551,14 +553,14 @@ bool commitShot(PlayerHW &pl) {
 void hitLightUp(PlayerHW &pl, int r, int c) {
   pl.strip1.setPixelColor(indexConvert(r, c), 255, 0, 0);
   pl.strip2.setPixelColor(indexConvert(r, c), 255, 0, 0);
-  startRipple(r,c);
+  startRipple(pl, r, c);
   playWav(Hit);
 }
 
 void missLightUp(PlayerHW &pl, int r, int c) {
   pl.strip1.setPixelColor(indexConvert(r, c), 127, 127, 127);
   pl.strip2.setPixelColor(indexConvert(r, c), 127, 127, 127);
-  startRipple(r,c);
+  startRipple(pl, r, c);
   playWav(Miss);
 }
 
@@ -601,13 +603,13 @@ int getPosition(int positionPin){
       positionAverage += positionValue;
 
     }
+   
     if(positionAverage % 5 == 0){
       positionAverage = positionAverage/5;
-    }
-    else{
+    } else {
       positionAverage = 0;
     }
-    
+
   }
 
   return positionValue;
@@ -878,12 +880,12 @@ void updateOcean() {
   // Faster frame rate (~40 FPS)
   if (millis() - lastOceanUpdate < 75) return;
   lastOceanUpdate = millis();
+
   for( int p = 0; p < 2; p++){
     for ( int i = 0; i < LED_COUNT; i++){
       players[p].strip1.setPixelColor(i, players[p].previousColors1[i]);
+    }
   }
-  }
-
 
   for (int r = 0; r < 10; r++) {
     for (int c = 0; c < 10; c++) {
@@ -970,10 +972,12 @@ void updateOcean() {
 
 }
 
-void startRipple(int r, int c) {
+void startRipple(PlayerHW &pl, int r, int c) {
   rippleActive = true;
   rippleRow = r;
   rippleCol = c;
+  
+  ripplePlayer = otherPlayer(activePlayer);
 
   rippleRadius = 0.0;
   rippleStrength = 1.0;
@@ -994,7 +998,7 @@ void updateRipple(PlayerHW &pl) {
       int idx = indexConvert(r, c);
 
       // Read CURRENT pixel (already has ocean)
-      uint32_t cur = pl.strip1.getPixelColor(idx);
+      uint32_t cur = players[ripplePlayer].strip1.getPixelColor(idx);
 
       uint8_t cr = (cur >> 16) & 0xFF;
       uint8_t cg = (cur >> 8) & 0xFF;
@@ -1021,7 +1025,7 @@ void updateRipple(PlayerHW &pl) {
         cg = min(255, cg + glow / 2);
         cb = min(255, cb + glow);
 
-        pl.strip1.setPixelColor(idx, cr, cg, cb);
+        players[ripplePlayer].strip1.setPixelColor(idx, cr, cg, cb);
       }
     }
   }
