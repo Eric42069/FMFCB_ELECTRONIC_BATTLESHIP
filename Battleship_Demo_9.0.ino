@@ -177,7 +177,8 @@ struct WavInfo {
 // ===== I2S =====
 static uint32_t g_rate = 0;
 
-void refreshColors(PlayerHW &pl);
+void refreshAimColors(PlayerHW &pl);
+void refreshOceanColors(PlayerHW &pl);
 void saveColors(PlayerHW &pl);
 void aiming(PlayerHW &pl);
 void blinkIndicatorR(PlayerHW &pl);
@@ -334,9 +335,7 @@ void loop() {
         digitalWrite(pl.greenLED, HIGH);
       }
       if(pl.inputRow != preInputRow || pl.inputCol != preInputCol){
-        for ( int i = 0; i < LED_COUNT; i++){
-          pl.strip2.setPixelColor(i, pl.previousColors2[i]);
-        }
+        refreshAimColors(pl);
       }
       preaim(pl);
       break;
@@ -345,9 +344,7 @@ void loop() {
       aiming(pl);
       blinkIndicatorR(pl);
       if (red) {
-        for ( int i = 0; i < LED_COUNT; i++){
-          pl.strip2.setPixelColor(i, pl.previousColors2[i]);
-        }
+        refreshAimColors(pl);
         playWav(Fire);
         bool hit = commitShot(pl);
         aimingActive = false;
@@ -365,9 +362,7 @@ void loop() {
         if(pl.inputRow != preInputRow || pl.inputCol != preInputCol){
           gameState = WAITING_FOR_AIM;
           aimingActive = false;
-            for ( int i = 0; i < LED_COUNT; i++){
-              pl.strip2.setPixelColor(i, pl.previousColors2[i]);
-            }
+          refreshAimColors(pl);
         }
     break;
 
@@ -441,12 +436,15 @@ void saveColors(PlayerHW &pl){
   }
 }
 
-void refreshColors(PlayerHW &pl){
-  for ( int i = 0; i < LED_COUNT; i++){
-    pl.strip1.setPixelColor(i, pl.previousColors1[i]);
-  }
+void refreshAimColors(PlayerHW &pl){
   for ( int i = 0; i < LED_COUNT; i++){
     pl.strip2.setPixelColor(i, pl.previousColors2[i]);
+  }
+}
+
+void refreshOceanColors(PlayerHW &pl){
+  for ( int i = 0; i < LED_COUNT; i++){
+    pl.strip1.setPixelColor(i, pl.previousColors1[i]);
   }
 }
 
@@ -468,9 +466,7 @@ void aiming(PlayerHW &pl){
     aimStep = 0;
     aimMax = max(max(9 - aimCol, aimCol), max(9 - aimRow, aimRow));
     lastAimUpdate = millis();
-    for ( int i = 0; i < LED_COUNT; i++){
-      pl.strip2.setPixelColor(i, pl.previousColors2[i]);
-    }
+    refreshAimColors(pl);
     return;
   }
 
@@ -478,9 +474,7 @@ void aiming(PlayerHW &pl){
   if (millis() - lastAimUpdate >= 80) {
     lastAimUpdate = millis();
 
-    for ( int i = 0; i < LED_COUNT; i++){
-      pl.strip2.setPixelColor(i, pl.previousColors2[i]);
-    } // restore base colors before drawing current step
+    refreshAimColors(pl); // restore base colors before drawing current step
 
     pl.strip2.setPixelColor(indexConvert(pl.inputRow, pl.inputCol), 255, 255, 0);
 
@@ -494,9 +488,7 @@ void aiming(PlayerHW &pl){
 
     // Once done, highlight target and stop animation
     if (aimStep > aimMax) {
-    for ( int i = 0; i < LED_COUNT; i++){
-      pl.strip2.setPixelColor(i, pl.previousColors2[i]);
-    }
+      refreshAimColors(pl);
       aimingActive = false;
       playWav(Ping);   
     }
@@ -537,7 +529,8 @@ bool commitShot(PlayerHW &pl) {
   if (enemy.found[pl.inputRow][pl.inputCol])
     return false;
 
-  refreshColors(pl);
+  refreshOceanColors(pl);
+  refreshAimColors(pl);
 
   if (enemy.ships[pl.inputRow][pl.inputCol]) {
     enemy.found[pl.inputRow][pl.inputCol] = true;
@@ -558,9 +551,6 @@ bool commitShot(PlayerHW &pl) {
   saveColors(pl);
   return false;    // MISS
 }
-
-
-
 
 // 8×8 Matrix helpers
 void hitLightUp(PlayerHW &pl, int r, int c) {
