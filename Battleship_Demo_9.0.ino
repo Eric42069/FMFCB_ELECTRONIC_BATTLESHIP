@@ -311,14 +311,14 @@ void setup() {
  
   detectShipPositions(boards[1], mcp1);
   
-  initrandomMatrix(boards[2]);
+  //initrandomMatrix(boards[2]);
 
   saveColors(players[0]);
   saveColors(players[1]);
 
   playWav(Whistle);
   digitalWrite(P1_RED_LED, LOW);
-  digitalWrite(P1_RED_LED, LOW);
+  digitalWrite(P1_GREEN_LED, LOW);
 
   Serial.println("Starting Game");
 
@@ -563,7 +563,6 @@ bool commitShot(PlayerHW &pl) {
       playWav(Sunk);
     }
     enemy.remaining--;
-    hitLightUp(pl, pl.inputRow, pl.inputCol);
     Serial.println(enemy.remaining);
     saveColors(pl);
 
@@ -941,6 +940,8 @@ void updateOcean() {
   // Faster frame rate (~40 FPS)
   if (millis() - lastOceanUpdate < 100) return;
   lastOceanUpdate = millis();
+  refreshOceanColors(players[0]);
+  refreshOceanColors(players[1]);
 
   for (int r = 0; r < 10; r++) {
     for (int c = 0; c < 10; c++) {
