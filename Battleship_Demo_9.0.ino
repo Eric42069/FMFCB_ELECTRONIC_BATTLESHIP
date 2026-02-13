@@ -186,7 +186,7 @@ void hitLightUp(PlayerHW &pl, int r, int c);
 void missLightUp(PlayerHW &pl, int r, int c);
 bool commitShot(PlayerHW &pl);
 void preaim(PlayerHW &pl);
-void updateRipple(PlayerHW &pl);
+void updateRipple();
 void startRipple(PlayerHW &pl, int r, int c);
 
 int y = 0;
@@ -237,7 +237,7 @@ const char* Miss = kPlaylist[4];
 void setup() {
   #if defined(__AVR_ATtiny85__) && (F_CPU == 16000000)
   clock_prescale_set(clock_div_1);
-#endif
+  #endif
 
   Serial.begin(115200);
   pinMode(POT_PIN, INPUT);
@@ -334,7 +334,9 @@ void loop() {
         digitalWrite(pl.greenLED, HIGH);
       }
       if(pl.inputRow != preInputRow || pl.inputCol != preInputCol){
-        //refreshColors(pl);
+        for ( int i = 0; i < LED_COUNT; i++){
+          pl.strip2.setPixelColor(i, pl.previousColors2[i]);
+        }
       }
       preaim(pl);
       break;
@@ -343,7 +345,9 @@ void loop() {
       aiming(pl);
       blinkIndicatorR(pl);
       if (red) {
-        refreshColors(pl);
+        for ( int i = 0; i < LED_COUNT; i++){
+          pl.strip2.setPixelColor(i, pl.previousColors2[i]);
+        }
         playWav(Fire);
         bool hit = commitShot(pl);
         aimingActive = false;
@@ -361,7 +365,9 @@ void loop() {
         if(pl.inputRow != preInputRow || pl.inputCol != preInputCol){
           gameState = WAITING_FOR_AIM;
           aimingActive = false;
-          //refreshColors(pl);
+            for ( int i = 0; i < LED_COUNT; i++){
+              pl.strip2.setPixelColor(i, pl.previousColors2[i]);
+            }
         }
     break;
 
@@ -372,7 +378,7 @@ void loop() {
   preInputRow = pl.inputRow;
   preInputCol = pl.inputCol;
   updateOcean();
-  updateRipple(pl);
+  updateRipple();
   players[0].strip1.show();
   players[0].strip2.show();
   players[1].strip1.show();
@@ -462,7 +468,9 @@ void aiming(PlayerHW &pl){
     aimStep = 0;
     aimMax = max(max(9 - aimCol, aimCol), max(9 - aimRow, aimRow));
     lastAimUpdate = millis();
-    refreshColors(pl);
+    for ( int i = 0; i < LED_COUNT; i++){
+      pl.strip2.setPixelColor(i, pl.previousColors2[i]);
+    }
     return;
   }
 
@@ -470,7 +478,10 @@ void aiming(PlayerHW &pl){
   if (millis() - lastAimUpdate >= 80) {
     lastAimUpdate = millis();
 
-    refreshColors(pl); // restore base colors before drawing current step
+    for ( int i = 0; i < LED_COUNT; i++){
+      pl.strip2.setPixelColor(i, pl.previousColors2[i]);
+    } // restore base colors before drawing current step
+
     pl.strip2.setPixelColor(indexConvert(pl.inputRow, pl.inputCol), 255, 255, 0);
 
     int i = aimMax - aimStep;
@@ -483,7 +494,9 @@ void aiming(PlayerHW &pl){
 
     // Once done, highlight target and stop animation
     if (aimStep > aimMax) {
-      refreshColors(pl);
+    for ( int i = 0; i < LED_COUNT; i++){
+      pl.strip2.setPixelColor(i, pl.previousColors2[i]);
+    }
       aimingActive = false;
       playWav(Ping);   
     }
@@ -878,14 +891,8 @@ void updateOcean() {
   if (!oceanActive) return;
 
   // Faster frame rate (~40 FPS)
-  if (millis() - lastOceanUpdate < 75) return;
+  if (millis() - lastOceanUpdate < 100) return;
   lastOceanUpdate = millis();
-
-  for( int p = 0; p < 2; p++){
-    for ( int i = 0; i < LED_COUNT; i++){
-      players[p].strip1.setPixelColor(i, players[p].previousColors1[i]);
-    }
-  }
 
   for (int r = 0; r < 10; r++) {
     for (int c = 0; c < 10; c++) {
@@ -958,9 +965,82 @@ void updateOcean() {
         int bCol = min(255, blue + foam);
 
         players[0].strip1.setPixelColor(idx, rCol, gCol, bCol);
-        players[1].strip1.setPixelColor(idx, rCol, gCol, bCol);
       }
     }
+  }
+  for (int r = 0; r < 10; r++) {
+    for (int c = 0; c < 10; c++) {
+
+      int idx = indexConvert(r, c);
+      uint32_t base = players[1].previousColors1[idx];
+
+      uint8_t br = (base >> 16) & 0xFF;
+      uint8_t bg = (base >> 8) & 0xFF;
+      uint8_t bb = base & 0xFF;
+
+      // Only affect blue tiles
+      if (br == 0 && bg == 0 && bb > 0) {
+
+        // Large slow swells
+        float swell1 = sin(oceanTime * 0.6 + r * 0.7 + c * 0.3);
+        float swell2 = sin(oceanTime * 0.4 + r * 0.2 - c * 0.8);
+
+        // Medium waves
+        float wave1 = sin(oceanTime * 1.3 + r * 1.2);
+        float wave2 = sin(oceanTime * 1.1 + c * 1.4);
+
+        // Small fast ripples
+        float ripple1 = sin(oceanTime * 2.4 + (r + c) * 1.8);
+        float ripple2 = sin(oceanTime * 2.8 + (r - c) * 1.5);
+        float mix;
+
+        // Combine all layers
+        if(storm == 0){
+          mix =
+          swell1 * 0.35 +
+          swell2 * 0.25 +
+          wave1  * 0.20 +
+          wave2  * 0.15 +
+          ripple1 * 0.03 +
+          ripple2 * 0.02;
+        } else if(storm == 1){
+          mix =
+          swell1 * 0.35 +
+          swell2 * 0.25 +
+          wave1  * 0.20 +
+          wave2  * 0.15 +
+          ripple1 * 0.06 +
+          ripple2 * 0.05;
+        }
+
+        // Normalize
+        float level = (mix + 1.2) * 0.45;
+
+        if (level < 0) level = 0;
+        if (level > 1) level = 1;
+
+        // Deep water color
+        int blue = (int)(level * 170) + 40;
+
+        // Foam on strong peaks
+        int foam = 0;
+        if (level > 0.82) {
+          foam = (int)((level - 0.82) * 700);
+          if (foam > 100) foam = 100;
+        }
+
+        // Slight random shimmer
+        foam += random(-5, 6);
+        if (foam < 0) foam = 0;
+
+        // Final color
+        int rCol = foam;
+        int gCol = foam;
+        int bCol = min(255, blue + foam);
+
+        players[1].strip1.setPixelColor(idx, rCol, gCol, bCol);
+      }
+    }  
   }
 
   // Much faster time flow
@@ -977,7 +1057,7 @@ void startRipple(PlayerHW &pl, int r, int c) {
   rippleRow = r;
   rippleCol = c;
   
-  ripplePlayer = otherPlayer(activePlayer);
+  ripplePlayer = activePlayer;
 
   rippleRadius = 0.0;
   rippleStrength = 1.0;
@@ -985,7 +1065,7 @@ void startRipple(PlayerHW &pl, int r, int c) {
   lastRippleUpdate = millis();
 }
 
-void updateRipple(PlayerHW &pl) {
+void updateRipple() {
   if (!rippleActive) return;
 
   // Frame rate (~40 FPS)
