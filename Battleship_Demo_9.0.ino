@@ -332,7 +332,7 @@ void loop() {
         digitalWrite(pl.greenLED, HIGH);
       }
       if(pl.inputRow != preInputRow || pl.inputCol != preInputCol){
-        refreshColors(pl);
+        //refreshColors(pl);
       }
       preaim(pl);
       break;
@@ -359,7 +359,7 @@ void loop() {
         if(pl.inputRow != preInputRow || pl.inputCol != preInputCol){
           gameState = WAITING_FOR_AIM;
           aimingActive = false;
-          refreshColors(pl);
+          //refreshColors(pl);
         }
     break;
 
@@ -601,7 +601,13 @@ int getPosition(int positionPin){
       positionAverage += positionValue;
 
     }
-    positionAverage = positionAverage/5;
+    if(positionAverage % 5 == 0){
+      positionAverage = positionAverage/5;
+    }
+    else{
+      positionAverage = 0;
+    }
+    
   }
 
   return positionValue;
@@ -870,11 +876,14 @@ void updateOcean() {
   if (!oceanActive) return;
 
   // Faster frame rate (~40 FPS)
-  if (millis() - lastOceanUpdate < 25) return;
+  if (millis() - lastOceanUpdate < 75) return;
   lastOceanUpdate = millis();
+  for( int p = 0; p < 2; p++){
+    for ( int i = 0; i < LED_COUNT; i++){
+      players[p].strip1.setPixelColor(i, players[p].previousColors1[i]);
+  }
+  }
 
-  refreshColors(players[0]);
-  refreshColors(players[1]);
 
   for (int r = 0; r < 10; r++) {
     for (int c = 0; c < 10; c++) {
@@ -985,7 +994,7 @@ void updateRipple(PlayerHW &pl) {
       int idx = indexConvert(r, c);
 
       // Read CURRENT pixel (already has ocean)
-      uint32_t cur = players[0].strip1.getPixelColor(idx);
+      uint32_t cur = pl.strip1.getPixelColor(idx);
 
       uint8_t cr = (cur >> 16) & 0xFF;
       uint8_t cg = (cur >> 8) & 0xFF;
@@ -1012,8 +1021,7 @@ void updateRipple(PlayerHW &pl) {
         cg = min(255, cg + glow / 2);
         cb = min(255, cb + glow);
 
-        players[0].strip1.setPixelColor(idx, cr, cg, cb);
-        players[1].strip1.setPixelColor(idx, cr, cg, cb);
+        pl.strip1.setPixelColor(idx, cr, cg, cb);
       }
     }
   }
