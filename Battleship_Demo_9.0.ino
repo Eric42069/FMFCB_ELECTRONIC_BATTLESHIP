@@ -161,12 +161,16 @@ PlayerHW players[2] = {
 
 // ===== Playlist (match your uploaded names exactly) =====
 static const char* kPlaylist[] = {
+  
   "/audio/pipes.wav",
   "/audio/fire-woosh-1348.wav",
   "/audio/explosive-impact-from-afar-2758.wav",
   "/audio/airport-radar-ping-1582.wav",
   "/audio/liquid-bubble-3000.wav",
   "/audio/target_destoryed.wav",
+  "/audio/victory.wav",
+   "/audio/set_volume.wav",
+   "/audio/fleet_commanders_place.wav",
 };
 
 struct WavInfo;
@@ -242,6 +246,9 @@ const char* Hit = kPlaylist[2];
 const char* Ping = kPlaylist[3];
 const char* Miss = kPlaylist[4];
 const char* Sunk = kPlaylist[5];
+const char* Victory = kPlaylist[6];
+const char* Set_Volume = kPlaylist[7];
+const char* Place_Fleet = kPlaylist[8];
 
 void setup() {
   #if defined(__AVR_ATtiny85__) && (F_CPU == 16000000)
@@ -300,13 +307,14 @@ void setup() {
   LittleFS.begin();
 
   randomSeed(analogRead(A0));
+  
 
   setVolume();
-
+playWav(Set_Volume);
   setBrightness();
 
   startOcean();
-
+  playWav(Place_Fleet);
   detectShipPositions(boards[0], mcp0); 
  
   detectShipPositions(boards[1], mcp1);
@@ -377,17 +385,13 @@ void loop() {
     break;
 
     case GAME_OVER:
-      winSequence();
-      while (true) delay(1000);
+      break;
   }
   preInputRow = pl.inputRow;
   preInputCol = pl.inputCol;
   updateOcean();
   updateRipple();
-  players[0].strip1.show();
-  players[0].strip2.show();
-  players[1].strip1.show();
-  players[1].strip2.show();
+  stripShow();
 
 }
 
@@ -397,6 +401,13 @@ void endTurn() {
   players[activePlayer].inputCol = -1;
   activePlayer = otherPlayer(activePlayer);
   gameState = WAITING_FOR_AIM;
+}
+
+void stripShow() {
+  players[0].strip1.show();
+  players[0].strip2.show();
+  players[1].strip1.show();
+  players[1].strip2.show();
 }
 
 // --- Matrix Initialization --- //
@@ -616,7 +627,7 @@ int getPosition(int positionPin){
     for(int i = 0; i < 5; i++){
 
       sensorValue = analogRead(positionPin);
-      Serial.println(sensorValue);
+      //Serial.println(sensorValue);
 
 
     // Map the value to a specific position (adjust ranges based on your resistor values)
@@ -680,12 +691,12 @@ static bool playWav(const char *path) {
   setupI2S(w.sampleRate);
   f.seek(w.dataOffset);
 
-  uint8_t buf[1024];
+  uint8_t buf[512];
   int16_t out[512]; // 256 frames * 2ch
   uint32_t left = w.dataSize;
 
   while (left) {
-    float vol = analogRead(POT_PIN) / 4095.0f;
+    //float vol = analogRead(POT_PIN) / 4095.0f;
 
     int n = f.read(buf, min((uint32_t)sizeof(buf), left));
     if (n <= 0) break;
@@ -771,6 +782,11 @@ static bool parseWav(File &f, WavInfo &w) {
       readLE16(f); // blockAlign
       w.bitsPerSample = readLE16(f);
 
+      Serial.print("Sample Rate: ");
+      Serial.println(w.sampleRate);
+      Serial.print("Channels: ");
+      Serial.println(w.numChannels);
+
       // skip any extra fmt bytesg
       if (size > 16) f.seek(f.position() + (size - 16));
 
@@ -798,6 +814,7 @@ static bool parseWav(File &f, WavInfo &w) {
 // --- Win sequence --- //
 void winSequence() {
   Serial.println("All targets found! You win!");
+  playWav(Victory);
 }
 
 void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]){
@@ -1172,9 +1189,10 @@ void setVolume(){
   int volPosition = getPosition(P1_POT_COL);
 
   while(digitalRead(P1_RED_BTN) == HIGH){
+      
     blinkIndicatorR(players[0]);
     volume = 1 - (analogRead(P1_POT_COL) / 4095.0f);
-    Serial.println(volume);
+    //Serial.println(volume);
     if(getPosition(P1_POT_COL) != volPosition){
       playWav(Miss);
       volPosition = getPosition(P1_POT_COL);
@@ -1219,7 +1237,7 @@ void setBrightness(){
       brightness = 255;
       break;
     }
-    Serial.println(brightness);
+    //Serial.println(brightness);
 
     for(int p = 0; p < 2; p++){
       players[p].strip1.clear();
