@@ -65,6 +65,8 @@ static const int I2S_DOUT = 14;
 static const int POT_PIN  = 5;
 
 TaskHandle_t audioTask;
+TaskHandle_t hitTask;
+TaskHandle_t missTask;
 volatile int audioFile = 0;
 
 enum Player {
@@ -175,6 +177,7 @@ static const char* kPlaylist[] = {
    "/audio/fleet_commanders_place.wav",
 };
 
+
 struct WavInfo;
 static bool parseWav(File &f, WavInfo &w);
 
@@ -242,6 +245,7 @@ int rippleCol = 0;
 float rippleRadius = 0.0;
 float rippleStrength = 1.0;
 
+
 const char* Whistle = kPlaylist[0];
 const char* Fire = kPlaylist[1];
 const char* Hit = kPlaylist[2];
@@ -251,6 +255,7 @@ const char* Sunk = kPlaylist[5];
 const char* Victory = kPlaylist[6];
 const char* Set_Volume = kPlaylist[7];
 const char* Place_Fleet = kPlaylist[8];
+
 
 void setup() {
   #if defined(__AVR_ATtiny85__) && (F_CPU == 16000000)
@@ -379,8 +384,6 @@ void loop() {
       if (red) {
         refreshAimColors(pl);
         pl.strip2.show();
-        //playWav(Fire);
-        audioFile = 2;
         bool hit = commitShot(pl);
         aimingActive = false;
 
@@ -412,13 +415,26 @@ void loop() {
 
 }
 
+void HitTaskCode(void * parameter){
+  PlayerHW &pl = players[activePlayer];
+  vTaskDelay(3400);
+  hitLightUp(pl, pl.inputRow, pl.inputCol);
+  vTaskDelete(hitTask);
+}
+
+void MissTaskCode(void * parameter){
+  PlayerHW &pl = players[activePlayer];
+  vTaskDelay(3400);
+  missLightUp(pl, pl.inputRow, pl.inputCol);
+  vTaskDelete(missTask);
+}
 
 void AudioTaskCode(void * parameter){
   for(;;){
     Serial.println(audioFile);
     switch(audioFile){
       case 0:
-        vTaskDelay(1);
+        vTaskDelay(10);
         break;
       case 1:
         playWav(Whistle);
@@ -427,7 +443,8 @@ void AudioTaskCode(void * parameter){
         }
         break;
       case 2:
-        playWav(Fire);
+        playWav(Miss);
+
         if(audioFile == 2){
           audioFile = 0;
         }
@@ -445,7 +462,7 @@ void AudioTaskCode(void * parameter){
         }
         break;
       case 5:
-        playWav(Miss);
+
         if(audioFile == 5){
           audioFile = 0;
         }
@@ -463,7 +480,6 @@ void AudioTaskCode(void * parameter){
         }
         break;
       case 8:
-        Serial.println(audioFile);
         playWav(Set_Volume);
         if(audioFile == 8){
           audioFile = 0;
@@ -654,7 +670,9 @@ bool commitShot(PlayerHW &pl) {
         }
       }
     }
-    hitLightUp(pl, pl.inputRow, pl.inputCol);
+    //audio
+    xTaskCreate(HitTaskCode, "hitTask", 10000, NULL, 0, &hitTask);
+    //hitLightUp(pl, pl.inputRow, pl.inputCol);
     if(shipSunk == true){
       //playWav(Sunk);
       audioFile = 6;
@@ -670,8 +688,9 @@ bool commitShot(PlayerHW &pl) {
 
     return true;   // HIT
   }
-
-  missLightUp(pl, pl.inputRow, pl.inputCol);
+  //audioFile
+  xTaskCreate(MissTaskCode, "missTask", 10000, NULL, 0, &missTask);
+  //missLightUp(pl, pl.inputRow, pl.inputCol);
   saveColors(pl);
   return false;    // MISS
 }
@@ -679,19 +698,15 @@ bool commitShot(PlayerHW &pl) {
 
 // 8×8 Matrix helpers
 void hitLightUp(PlayerHW &pl, int r, int c) {
-  pl.strip1.setPixelColor(indexConvert(r, c), 255, 0, 0);
-  pl.strip2.setPixelColor(indexConvert(r, c), 255, 0, 0);
+  players[activePlayer].strip1.setPixelColor(indexConvert(r, c), 255, 0, 0);
+  players[activePlayer].strip2.setPixelColor(indexConvert(r, c), 255, 0, 0);
   startRipple(pl, r, c);
-  //playWav(Hit);
-  audioFile = 3;
 }
 
 void missLightUp(PlayerHW &pl, int r, int c) {
   pl.strip1.setPixelColor(indexConvert(r, c), 127, 127, 127);
   pl.strip2.setPixelColor(indexConvert(r, c), 127, 127, 127);
   startRipple(pl, r, c);
-  //playWav(Miss);
-  audioFile = 5;
 }
 
 int indexConvert(int r, int c){
@@ -1284,7 +1299,9 @@ void setVolume(){
     //Serial.println(volume);
     if(getPosition(P1_POT_COL) != volPosition){
       //playWav(Miss);
+      Serial.println(audioFile);
       audioFile = 5;
+      Serial.println(audioFile);
       volPosition = getPosition(P1_POT_COL);
     }
   }
