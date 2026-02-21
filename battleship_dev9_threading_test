@@ -76,9 +76,9 @@ enum Player {
 
 enum GameState {
   WAITING_FOR_AIM,
-  AIMING,
+  STALL,
   WAITING_FOR_CONFIRM,
-  GAME_OVER
+  GAME_OVER,
 };
 
 Player activePlayer = PLAYER_1;
@@ -168,13 +168,14 @@ static const char* kPlaylist[] = {
   
   "/audio/pipes.wav",
   "/audio/fire-woosh-1348.wav",
-  "/audio/explosive-impact-from-afar-2758.wav",
+  "/audio/hit.wav",
   "/audio/airport-radar-ping-1582.wav",
   "/audio/liquid-bubble-3000.wav",
   "/audio/target_destoryed.wav",
   "/audio/victory.wav",
-   "/audio/set_volume.wav",
-   "/audio/fleet_commanders_place.wav",
+  "/audio/set_volume.wav",
+  "/audio/fleet_commanders_place.wav",
+  "/audio/miss.wav",
 };
 
 
@@ -250,11 +251,12 @@ const char* Whistle = kPlaylist[0];
 const char* Fire = kPlaylist[1];
 const char* Hit = kPlaylist[2];
 const char* Ping = kPlaylist[3];
-const char* Miss = kPlaylist[4];
+const char* Bloop = kPlaylist[4];
 const char* Sunk = kPlaylist[5];
 const char* Victory = kPlaylist[6];
 const char* Set_Volume = kPlaylist[7];
 const char* Place_Fleet = kPlaylist[8];
+const char* Miss = kPlaylist[9];
 
 
 void setup() {
@@ -315,7 +317,7 @@ void setup() {
     NULL,
     0,
     &audioTask,
-    1
+    0
   );
 
 
@@ -356,9 +358,10 @@ void setup() {
 void loop() {
 
   PlayerHW &pl = players[activePlayer];
-  pl.inputRow = getPosition(pl.potRowPin);
-  pl.inputCol = getPosition(pl.potColPin);
-
+  if(gameState != STALL){
+    pl.inputRow = getPosition(pl.potRowPin);
+    pl.inputCol = getPosition(pl.potColPin);
+  }
 
   bool green = buttonPressed(pl.greenBtn);
 
@@ -388,11 +391,12 @@ void loop() {
         aimingActive = false;
 
         if (!hit) {
-          endTurn();              // miss → switch player
+          //endTurn();              // miss → switch player
           digitalWrite(pl.redLED, LOW);
           digitalWrite(pl.greenLED, LOW);
+          gameState = STALL;
         } else if(gameState != GAME_OVER) {
-          gameState = WAITING_FOR_AIM;  // hit → same player aims again
+          gameState = STALL;  // hit → same player aims again
           digitalWrite(pl.redLED, LOW);
           digitalWrite(pl.greenLED, LOW);
         }
@@ -404,8 +408,12 @@ void loop() {
         }
     break;
 
+    case STALL:
+      break;
+
     case GAME_OVER:
       break;
+
   }
   preInputRow = pl.inputRow;
   preInputCol = pl.inputCol;
@@ -419,22 +427,21 @@ void HitTaskCode(void * parameter){
   PlayerHW &pl = players[activePlayer];
   vTaskDelay(3400);
   hitLightUp(pl, pl.inputRow, pl.inputCol);
-  vTaskDelete(hitTask);
+  vTaskDelete(NULL);
 }
 
 void MissTaskCode(void * parameter){
   PlayerHW &pl = players[activePlayer];
   vTaskDelay(3400);
   missLightUp(pl, pl.inputRow, pl.inputCol);
-  vTaskDelete(missTask);
+  vTaskDelete(NULL);
 }
 
 void AudioTaskCode(void * parameter){
   for(;;){
-    Serial.println(audioFile);
     switch(audioFile){
       case 0:
-        vTaskDelay(10);
+        vTaskDelay(1);
         break;
       case 1:
         playWav(Whistle);
@@ -444,7 +451,6 @@ void AudioTaskCode(void * parameter){
         break;
       case 2:
         playWav(Miss);
-
         if(audioFile == 2){
           audioFile = 0;
         }
@@ -462,7 +468,7 @@ void AudioTaskCode(void * parameter){
         }
         break;
       case 5:
-
+        playWav(Bloop);
         if(audioFile == 5){
           audioFile = 0;
         }
@@ -650,8 +656,10 @@ bool commitShot(PlayerHW &pl) {
 
   Board &enemy = boards[otherPlayer(activePlayer)];
 
-  if (enemy.found[pl.inputRow][pl.inputCol])
+  if (enemy.found[pl.inputRow][pl.inputCol]){
+    endTurn();
     return false;
+  }
 
   refreshOceanColors(pl);
   refreshAimColors(pl);
@@ -670,17 +678,14 @@ bool commitShot(PlayerHW &pl) {
         }
       }
     }
-    //audio
+    audioFile = 3;
+    delay(5);
     xTaskCreate(HitTaskCode, "hitTask", 10000, NULL, 0, &hitTask);
-    //hitLightUp(pl, pl.inputRow, pl.inputCol);
     if(shipSunk == true){
-      //playWav(Sunk);
       audioFile = 6;
     }
     enemy.remaining--;
     Serial.println(enemy.remaining);
-    saveColors(pl);
-
     if (enemy.remaining == 0) {
       gameState = GAME_OVER;
       winSequence();
@@ -688,25 +693,28 @@ bool commitShot(PlayerHW &pl) {
 
     return true;   // HIT
   }
-  //audioFile
+  audioFile = 2;
   xTaskCreate(MissTaskCode, "missTask", 10000, NULL, 0, &missTask);
-  //missLightUp(pl, pl.inputRow, pl.inputCol);
-  saveColors(pl);
   return false;    // MISS
 }
 
 
 // 8×8 Matrix helpers
 void hitLightUp(PlayerHW &pl, int r, int c) {
-  players[activePlayer].strip1.setPixelColor(indexConvert(r, c), 255, 0, 0);
-  players[activePlayer].strip2.setPixelColor(indexConvert(r, c), 255, 0, 0);
+  pl.strip1.setPixelColor(indexConvert(r, c), 255, 0, 0);
+  pl.strip2.setPixelColor(indexConvert(r, c), 255, 0, 0);
+  saveColors(pl);
   startRipple(pl, r, c);
+  delay(500);
+  gameState = WAITING_FOR_AIM;
 }
 
 void missLightUp(PlayerHW &pl, int r, int c) {
   pl.strip1.setPixelColor(indexConvert(r, c), 127, 127, 127);
   pl.strip2.setPixelColor(indexConvert(r, c), 127, 127, 127);
+  saveColors(pl);
   startRipple(pl, r, c);
+  endTurn();
 }
 
 int indexConvert(int r, int c){
