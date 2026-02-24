@@ -27,7 +27,7 @@
 
 #define orca 2
 #define sub 3
-#define AOPS 3
+#define AOPS 6
 #define frigate 4
 #define JSS 5
 
