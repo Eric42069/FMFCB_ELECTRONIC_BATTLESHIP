@@ -1184,19 +1184,28 @@ void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]){
         mcpDevice[activeDevice].digitalWrite(gpioPinActive, HIGH);
       }
     }
-   /* If(numberOfShips >= 5){
+   if(numberOfShips >= 5){
       byte threeCheck = 0;
       for(byte y = 0; y < boardSize; y++){
         for(byte x = 0; x < boardSize; x++){
+          Serial.print("threeCheck: ");
+          Serial.println(threeCheck);
           if(b.ships[y][x] == 3){
-            threeCheck += threeCheck;
-            if(threeCheck > 3)
-            numberOfShips = 0;
-            for(byte y = 0; y < boardSize)
+            Serial.print("b.ships[][]: ");
+            Serial.println(b.ships[y][x]);
+            threeCheck ++;
+            if(threeCheck > 3){
+              numberOfShips = 0;
+              for(byte y = 0; y < boardSize; y++){
+                for(byte x = 0; x < boardSize; x++){
+                  b.ships[y][x] = 0;
+                }
+              }
+            }
           }
         }
       }
-    }*/
+    }
   }
   Serial.println(numberOfShips);
   b.remaining = 17;
