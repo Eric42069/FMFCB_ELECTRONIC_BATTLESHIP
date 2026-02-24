@@ -37,6 +37,28 @@ Adafruit_MCP23X17 mcp1[8];
 TwoWire I2C_0 = TwoWire(0);
 TwoWire I2C_1 = TwoWire(1);
 
+#define Ping_Sound 0
+#define Whistle_Sound 1
+#define Bloop_Sound 2
+#define Hit_Sound 3
+#define Miss_Sound 4
+#define Sunk_Sound 5
+#define Victory_Sound 6
+#define Volume_Sound 7
+#define Brightness_Sound 8
+#define Halifax_Sound 9
+#define AOPS_Sound 10
+#define Orca_Sound 11
+#define JSS_Sound 12
+#define Sub_Sound 13
+#define Fleet_Destroyed_Sound 14
+#define Deploy_Sound 15
+#define P1_Deployed_Sound 16
+#define P2_Deployed_Sound 17
+#define Set_Coordinates_Sound 18
+#define Single_Player_Sound 19
+#define Whilhelm_Sound 20
+#define Coordinates_Locked_Sound 21
 
 // -------- PLAYER 1 PINS --------
 #define P1_GREEN_BTN   42
@@ -166,16 +188,29 @@ PlayerHW players[2] = {
 // ===== Playlist (match your uploaded names exactly) =====
 static const char* kPlaylist[] = {
   
-  "/audio/pipes.wav",
-  "/audio/fire-woosh-1348.wav",
-  "/audio/hit.wav",
+const char* audioFiles[] = {
   "/audio/airport-radar-ping-1582.wav",
+  "/audio/pipes.wav",
   "/audio/liquid-bubble-3000.wav",
-  "/audio/target_destoryed.wav",
+  "/audio/hit.wav",
+  "/audio/miss.wav",
+  "/audio/sunk.wav",
   "/audio/victory.wav",
   "/audio/set_volume.wav",
-  "/audio/fleet_commanders_place.wav",
-  "/audio/miss.wav",
+  "/audio/set_brightness.wav",
+  "/audio/ysa_halifax_class_frigate.wav",
+  "/audio/ysa_hary_dewolf_class_A-ops.wav",
+  "/audio/ysa_orca_class_patro_vessel.wav",
+  "/audio/ysa_protector_class_JSS.wav",
+  "/audio/ysa_victoria_class_subarine.wav",
+  "/audio/enemy_fleet_destroyed.wav",
+  "/audio/fleet_commanders_deploy_your_fleet.wav",
+  "/audio/fleet_one_deployed.wav",
+  "/audio/fleet_two_deployed.wav",
+  "/audio/set_coordinance.wav",
+  "/audio/single_player_mode.wav",
+  "/audio/Wilhelm scream.wav",
+  "/audio/corordinance_locked_in_fire_when_ready.wav"
 };
 
 
@@ -224,7 +259,7 @@ int aimCol = 0;
 int potVal1 = 0;
 int potVal2 = 0;
 uint8_t brightness = 0;
-float volume = 0;
+float volume = 0.75;
 bool singlePlayer = false;
 int ripplePlayer = -1;
 
@@ -246,17 +281,28 @@ int rippleCol = 0;
 float rippleRadius = 0.0;
 float rippleStrength = 1.0;
 
-
-const char* Whistle = kPlaylist[0];
-const char* Fire = kPlaylist[1];
-const char* Hit = kPlaylist[2];
-const char* Ping = kPlaylist[3];
-const char* Bloop = kPlaylist[4];
+const char* Ping = kPlaylist[0];
+const char* Whistle = kPlaylist[1];
+const char* Bloop = kPlaylist[2];
+const char* Hit = kPlaylist[3];
+const char* Miss = kPlaylist[4];
 const char* Sunk = kPlaylist[5];
 const char* Victory = kPlaylist[6];
-const char* Set_Volume = kPlaylist[7];
-const char* Place_Fleet = kPlaylist[8];
-const char* Miss = kPlaylist[9];
+const char* Volume = kPlaylist[7];
+const char* Brightness = kPlaylist[8];
+const char* Halifax = kPlaylist[9];
+const char* AOPS = kPlaylist[10];
+const char* Orca = kPlaylist[11];
+const char* JSS = kPlaylist[12];
+const char* Sub = kPlaylist[13];
+const char* Fleet_Destroyed = kPlaylist[14];
+const char* Deploy = kPlaylist[15];
+const char* P1_Deployed = kPlaylist[16];
+const char* P2_Deployed = kPlaylist[17];
+const char* Set_Coordinates = kPlaylist[18];
+const char* Single_Player = kPlaylist[19];
+const char* Whilhelm = kPlaylist[20];
+const char* Coordinates_Locked = kPlaylist[21];
 
 
 void setup() {
@@ -326,28 +372,27 @@ void setup() {
   LittleFS.begin();
 
   randomSeed(analogRead(A0));
-  
-  Serial.println(audioFile);
+
+  audioFile = Volume_Sound;
   setVolume();
-  //playWav(Set_Volume);
-  audioFile = 8;
-  //Serial.println(audioFile);
+  audioFile = Brightness_Sound;
   setBrightness();
 
   startOcean();
-  //playWav(Place_Fleet);
-  audioFile = 9;
-  detectShipPositions(boards[0], mcp0); 
+  audioFile = Deploy_Sound;
+
+  detectShipPositions(boards[0], mcp0);
+  audioFile = P1_Deployed_Sound;
  
   detectShipPositions(boards[1], mcp1);
+  audioFile = P2_Deployed_Sound;
   
   //initrandomMatrix(boards[2]);
 
   saveColors(players[0]);
   saveColors(players[1]);
 
-  //playWav(Whistle);
-  audioFile = 1;
+  audioFile = Whistle_Sound;
   digitalWrite(P1_RED_LED, LOW);
   digitalWrite(P1_GREEN_LED, LOW);
 
@@ -439,64 +484,163 @@ void MissTaskCode(void * parameter){
 
 void AudioTaskCode(void * parameter){
   for(;;){
-    switch(audioFile){
-      case 0:
-        vTaskDelay(1);
-        break;
-      case 1:
-        playWav(Whistle);
-        if(audioFile == 1){
-          audioFile = 0;
-        }
-        break;
-      case 2:
-        playWav(Miss);
-        if(audioFile == 2){
-          audioFile = 0;
-        }
-        break;
-      case 3:
-        playWav(Hit);
-        if(audioFile == 3){
-          audioFile = 0;
-        }
-        break;
-      case 4:
-        playWav(Ping);
-        if(audioFile == 4){
-          audioFile = 0;
-        }
-        break;
-      case 5:
-        playWav(Bloop);
-        if(audioFile == 5){
-          audioFile = 0;
-        }
-        break;
-      case 6:
-        playWav(Sunk);
-        if(audioFile == 6){
-          audioFile = 0;
-        }
-        break;
-      case 7:
-        playWav(Victory);
-        if(audioFile == 7){
-          audioFile = 0;
-        }
-        break;
-      case 8:
-        playWav(Set_Volume);
-        if(audioFile == 8){
-          audioFile = 0;
-        }
-        break;
-      case 9:
-        playWav(Place_Fleet);
-        if(audioFile == 9){
-          audioFile = 0;
-        }
-        break;
+    switch (audioFile) {
+        case Ping_Sound:
+          playWav(Ping);
+          if (audioFile == Ping_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Whistle_Sound:
+          playWav(Whistle);
+          if (audioFile == Whistle_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Bloop_Sound:
+          playWav(Bloop);
+          if (audioFile == Bloop_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Hit_Sound:
+          playWav(Hit);
+          if (audioFile == Hit_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Miss_Sound:
+          playWav(Miss);
+          if (audioFile == Miss_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Sunk_Sound:
+          playWav(Sunk);
+          if (audioFile == Sunk_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Victory_Sound:
+          playWav(Victory);
+          if (audioFile == Victory_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Volume_Sound:
+          playWav(Volume);
+          if (audioFile == Volume_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Brightness_Sound:
+          playWav(Brightness);
+          if (audioFile == Brightness_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Halifax_Sound:
+          playWav(Halifax);
+          if (audioFile == Halifax_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case AOPS_Sound:
+          playWav(AOPS);
+          if (audioFile == AOPS_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Orca_Sound:
+          playWav(Orca);
+          if (audioFile == Orca_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case JSS_Sound:
+          playWav(JSS);
+          if (audioFile == JSS_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Sub_Sound:
+          playWav(Sub);
+          if (audioFile == Sub_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Fleet_Destroyed_Sound:
+          playWav(Fleet_Destroyed);
+          if (audioFile == Fleet_Destroyed_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Deploy_Sound:
+          playWav(Deploy);
+          if (audioFile == Deploy_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case P1_Deployed_Sound:
+          playWav(P1_Deployed);
+          if (audioFile == P1_Deployed_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case P2_Deployed_Sound:
+          playWav(P2_Deployed);
+          if (audioFile == P2_Deployed_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Set_Coordinates_Sound:
+          playWav(Set_Coordinates);
+          if (audioFile == Set_Coordinates_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Single_Player_Sound:
+          playWav(Single_Player);
+          if (audioFile == Single_Player_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Whilhelm_Sound:
+          playWav(Whilhelm);
+          if (audioFile == Whilhelm_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        case Coordinates_Locked_Sound:
+          playWav(Coordinates_Locked);
+          if (audioFile == Coordinates_Locked_Sound) {
+            audioFile = 0;
+          }
+          break;
+      
+        default:
+          break;
     }
   }
 }
@@ -617,8 +761,7 @@ void aiming(PlayerHW &pl){
     if (aimStep > aimMax) {
       refreshAimColors(pl);
       aimingActive = false;
-      //playWav(Ping);
-      audioFile = 4; 
+      audioFile = Ping_Sound; 
     }
   }
 }
@@ -678,11 +821,31 @@ bool commitShot(PlayerHW &pl) {
         }
       }
     }
-    audioFile = 3;
-    delay(5);
+    if(shipSunk == true){
+      audioFile = Sunk_Sound;
+    } else {
+      audioFile = Hit_Sound;
+    }
+    delay(1);
     xTaskCreate(HitTaskCode, "hitTask", 10000, NULL, 0, &hitTask);
     if(shipSunk == true){
-      audioFile = 6;
+      switch(check){
+        case orca:
+          audioFile = Orca_Sound;
+        break;
+        case sub:
+          audioFile = Sub_Sound;
+        break;
+        case AOPS:
+          audioFile = AOPS_Sound;
+        break;
+        case frigate:
+          audioFile = Frigate_Sound;
+        break;
+        case JSS:
+          audioFile = JSS_Sound;
+        break;
+      }
     }
     enemy.remaining--;
     Serial.println(enemy.remaining);
@@ -693,7 +856,7 @@ bool commitShot(PlayerHW &pl) {
 
     return true;   // HIT
   }
-  audioFile = 2;
+  audioFile = Miss_Sound;
   xTaskCreate(MissTaskCode, "missTask", 10000, NULL, 0, &missTask);
   return false;    // MISS
 }
@@ -925,8 +1088,8 @@ static bool parseWav(File &f, WavInfo &w) {
 // --- Win sequence --- //
 void winSequence() {
   Serial.println("All targets found! You win!");
-  //playWav(Victory);
-  audioFile = 7;
+  audioFile = Fleet_Destryed_Sound;
+  audioFile = Victory_Sound;
 }
 
 void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]){
@@ -1326,10 +1489,7 @@ void setVolume(){
     volume = 1 - (analogRead(P1_POT_COL) / 4095.0f);
     //Serial.println(volume);
     if(getPosition(P1_POT_COL) != volPosition){
-      //playWav(Miss);
-      Serial.println(audioFile);
-      audioFile = 5;
-      Serial.println(audioFile);
+      audioFile = Bloop_Sound;
       volPosition = getPosition(P1_POT_COL);
     }
   }
