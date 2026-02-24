@@ -1,3 +1,4 @@
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_MCP23X17.h>
@@ -89,7 +90,7 @@ static const int POT_PIN  = 5;
 TaskHandle_t audioTask;
 TaskHandle_t hitTask;
 TaskHandle_t missTask;
-volatile int audioFile = 0;
+volatile int audioFile = -1;
 
 enum Player {
   PLAYER_1 = 0,
@@ -124,16 +125,16 @@ const byte gpioPinArray[boardSize][boardSize] = {
 };
 
 const byte gpioDeviceArray[boardSize][boardSize]{
-  {0,0,0,0,0,0,0,0,0,0},
-  {1,1,1,1,1,1,0,0,0,0},
-  {1,1,1,1,1,1,1,1,2,2},
-  {2,2,2,2,2,2,2,2,2,2},
-  {2,2,3,3,3,3,3,3,3,3},
-  {4,4,4,4,3,3,3,3,3,3},
-  {4,4,4,4,4,4,4,4,4,4},
-  {5,5,5,5,5,5,5,5,5,5},
-  {5,5,5,5,6,6,6,6,6,6},
-  {7,7,6,6,6,6,6,6,6,6},
+  {0,0,0,0,0,0,0,0,0,0}, //A
+  {1,1,1,1,1,1,0,0,0,0}, //B
+  {1,1,1,1,1,1,1,1,2,2}, //C
+  {2,2,2,2,2,2,2,2,2,2}, //D
+  {2,2,3,3,3,3,3,3,3,3}, //E
+  {4,4,4,4,3,3,3,3,3,3}, //F
+  {4,4,4,4,4,4,4,4,4,4}, //G
+  {5,5,5,5,5,5,5,5,5,5}, //H
+  {5,5,5,5,6,6,6,6,6,6}, //I
+  {7,7,6,6,6,6,6,6,6,6}, //J
 };
 
 struct Board {
@@ -168,16 +169,16 @@ struct PlayerHW {
 
 PlayerHW players[2] = {
   {
-    Adafruit_NeoPixel(LED_COUNT, P1_LED_PIN1, NEO_GRB + NEO_KHZ800),
-    Adafruit_NeoPixel(LED_COUNT, P1_LED_PIN2, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(LED_COUNT, P1_LED_PIN1, NEO_GRB + NEO_KHZ800 + NEO_RMT),
+    Adafruit_NeoPixel(LED_COUNT, P1_LED_PIN2, NEO_GRB + NEO_KHZ800 + NEO_RMT),
     P1_POT_ROW, P1_POT_COL,
     P1_GREEN_BTN, P1_RED_BTN,
     P1_GREEN_LED, P1_RED_LED,
     -1, -1, false
   },
   {
-    Adafruit_NeoPixel(LED_COUNT, P2_LED_PIN1, NEO_GRB + NEO_KHZ800),
-    Adafruit_NeoPixel(LED_COUNT, P2_LED_PIN2, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(LED_COUNT, P2_LED_PIN1, NEO_GRB + NEO_KHZ800 + NEO_RMT),
+    Adafruit_NeoPixel(LED_COUNT, P2_LED_PIN2, NEO_GRB + NEO_KHZ800 + NEO_RMT),
     P2_POT_ROW, P2_POT_COL,
     P2_GREEN_BTN, P2_RED_BTN,
     P2_GREEN_LED, P2_RED_LED,
@@ -187,8 +188,6 @@ PlayerHW players[2] = {
 
 // ===== Playlist (match your uploaded names exactly) =====
 static const char* kPlaylist[] = {
-  
-const char* audioFiles[] = {
   "/audio/airport-radar-ping-1582.wav",
   "/audio/pipes.wav",
   "/audio/liquid-bubble-3000.wav",
@@ -291,9 +290,9 @@ const char* Victory = kPlaylist[6];
 const char* Volume = kPlaylist[7];
 const char* Brightness = kPlaylist[8];
 const char* Halifax = kPlaylist[9];
-const char* AOPS = kPlaylist[10];
+const char* HDW = kPlaylist[10];
 const char* Orca = kPlaylist[11];
-const char* JSS = kPlaylist[12];
+const char* Protector = kPlaylist[12];
 const char* Sub = kPlaylist[13];
 const char* Fleet_Destroyed = kPlaylist[14];
 const char* Deploy = kPlaylist[15];
@@ -385,13 +384,17 @@ void setup() {
   audioFile = P1_Deployed_Sound;
  
   detectShipPositions(boards[1], mcp1);
+
   audioFile = P2_Deployed_Sound;
   
   //initrandomMatrix(boards[2]);
 
   saveColors(players[0]);
   saveColors(players[1]);
-
+  if(audioFile == P2_Deployed_Sound){
+    delay(2500);
+  }
+  printShipPositions();
   audioFile = Whistle_Sound;
   digitalWrite(P1_RED_LED, LOW);
   digitalWrite(P1_GREEN_LED, LOW);
@@ -488,154 +491,154 @@ void AudioTaskCode(void * parameter){
         case Ping_Sound:
           playWav(Ping);
           if (audioFile == Ping_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Whistle_Sound:
           playWav(Whistle);
           if (audioFile == Whistle_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Bloop_Sound:
           playWav(Bloop);
           if (audioFile == Bloop_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Hit_Sound:
           playWav(Hit);
           if (audioFile == Hit_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Miss_Sound:
           playWav(Miss);
           if (audioFile == Miss_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Sunk_Sound:
           playWav(Sunk);
           if (audioFile == Sunk_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Victory_Sound:
           playWav(Victory);
           if (audioFile == Victory_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Volume_Sound:
           playWav(Volume);
           if (audioFile == Volume_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Brightness_Sound:
           playWav(Brightness);
           if (audioFile == Brightness_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Halifax_Sound:
           playWav(Halifax);
           if (audioFile == Halifax_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case AOPS_Sound:
-          playWav(AOPS);
+          playWav(HDW);
           if (audioFile == AOPS_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Orca_Sound:
           playWav(Orca);
           if (audioFile == Orca_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case JSS_Sound:
-          playWav(JSS);
+          playWav(Protector);
           if (audioFile == JSS_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Sub_Sound:
           playWav(Sub);
           if (audioFile == Sub_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Fleet_Destroyed_Sound:
           playWav(Fleet_Destroyed);
           if (audioFile == Fleet_Destroyed_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Deploy_Sound:
           playWav(Deploy);
           if (audioFile == Deploy_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case P1_Deployed_Sound:
           playWav(P1_Deployed);
           if (audioFile == P1_Deployed_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case P2_Deployed_Sound:
           playWav(P2_Deployed);
           if (audioFile == P2_Deployed_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Set_Coordinates_Sound:
           playWav(Set_Coordinates);
           if (audioFile == Set_Coordinates_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Single_Player_Sound:
           playWav(Single_Player);
           if (audioFile == Single_Player_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Whilhelm_Sound:
           playWav(Whilhelm);
           if (audioFile == Whilhelm_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
         case Coordinates_Locked_Sound:
           playWav(Coordinates_Locked);
           if (audioFile == Coordinates_Locked_Sound) {
-            audioFile = 0;
+            audioFile = -1;
           }
           break;
       
@@ -840,7 +843,7 @@ bool commitShot(PlayerHW &pl) {
           audioFile = AOPS_Sound;
         break;
         case frigate:
-          audioFile = Frigate_Sound;
+          audioFile = Halifax_Sound;
         break;
         case JSS:
           audioFile = JSS_Sound;
@@ -1088,7 +1091,7 @@ static bool parseWav(File &f, WavInfo &w) {
 // --- Win sequence --- //
 void winSequence() {
   Serial.println("All targets found! You win!");
-  audioFile = Fleet_Destryed_Sound;
+  audioFile = Fleet_Destroyed_Sound;
   audioFile = Victory_Sound;
 }
 
@@ -1131,28 +1134,20 @@ void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]){
             numberOfShips++;
             
             for(byte x = column; x <= (column + i); x++){
-              if(i == 2){
-                gpioPinShort = mcpDevice[device].digitalRead(pin + 1);
-                if(gpioPinShort == && b.ships[row][column + i + 1] == EMPTY){
-                  for(byte x = column; x <= (column + i); x++){
+              byte newPin = gpioPinArray[row][column + i + 1];
+              byte newDevice = gpioDeviceArray[row][column + i + 1];
+              mcpDevice[newDevice].pinMode(newPin, INPUT_PULLUP);
+              gpioPinShort = mcpDevice[newDevice].digitalRead(newPin);
+              if(i == 1 && gpioPinShort == LOW && (column + i + 1) < boardSize){
+                if(gpioPinShort == LOW && b.ships[row][column + i + 1] == EMPTY){
+                  for(byte x = column; x <= (column + i + 1); x++){
                     b.ships[row][x] = 6; //First three ships is set to 6
                   }
                 }
               }
-              /*
-              if(i == 2 && firstThree == false){
-                firstThree = true;
-                for(byte x = column; x <= (column + i); x++){
-                  b.ships[row][x] = 6; //First three ships is set to 6
-                }
-                break;
-              }
-              */
               else{
                 b.ships[row][x] = i + 1; //i should be 2-5.
               }
-                           
-              //b.ships[row][x] = SHIP;
             }
           }          
         }
@@ -1165,43 +1160,61 @@ void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]){
           mcpDevice[device].pinMode(pin, INPUT_PULLUP);
           gpioPinShort = mcpDevice[device].digitalRead(pin);
           
-          if(gpioPinShort == LOW && b.ships[row + i][column] == EMPTY){
+          if(gpioPinShort == LOW && b.ships[row + i][column] == EMPTY){ //Ship detected
             numberOfShips++;
-            
+
             for(byte y = row; y <= (row + i); y++){
-              if(i == 2){
-                gpioPinShort = mcpDevice[device].digitalRead(pin + 1);
-                if(gpioPinShort == && b.ships[row][column + i + 1] == EMPTY){
-                  for(byte x = column; x <= (column + i); x++){
-                    b.ships[row][x] = 6; //First three ships is set to 6
+              byte newPin = gpioPinArray[row + i + 1][column];
+              byte newDevice = gpioDeviceArray[row + i + 1][column];
+              mcpDevice[newDevice].pinMode(newPin, INPUT_PULLUP);
+              gpioPinShort = mcpDevice[newDevice].digitalRead(newPin);
+              if(i == 1 && gpioPinShort == LOW && (row + i + 1) < boardSize){
+                if(gpioPinShort == LOW && b.ships[row + i + 1][column] == EMPTY){
+                  for(byte y = row; y <= (row + i + 1); y++){
+                    b.ships[y][column] = 6; //First three ships is set to 6
                   }
                 }
               }
-              /*
-              if(i == 2 && firstThree == false){
-                firstThree = true;
-                for(byte y = row; y <= (row + i); y++){
-                  b.ships[y][column] = 6; //First three ships is set to 6
-                }
-                break;
-              }
-              */
               else{
                 b.ships[y][column] = i + 1; //i should be 2-5.
               }
-              //b.ships[y][column] = SHIP;
             }
           }
         }
         mcpDevice[activeDevice].digitalWrite(gpioPinActive, HIGH);
       }
     }
-    //Serial.print("numberOfShips: ");
-    //Serial.println(numberOfShips);
-    //delay(50);
+    If(numberOfShips >= 5){
+      byte threeCheck = 0;
+      for(byte y = 0; y < boardSize; y++){
+        for(byte x = 0; x < boardSize; x++){
+          if(b.ships[y][x] == 3){
+            threeCheck += threeCheck;
+            if(threeCheck > 3)
+            numberOfShips = 0;
+            for(byte y = 0; y < boardSize)
+          }
+        }
+      }
+    }
   }
-  Serial.println(b.ships[9][9]);
+  Serial.println(numberOfShips);
   b.remaining = 17;
+}
+
+void printShipPositions(){
+  for(int i = 0; i < 2; i++){
+    Serial.println();
+    for(byte y = 0; y < 10; y++){
+      for(byte x = 0; x < 10; x++){
+        Serial.print(boards[i].ships[y][x]);
+        Serial.print(", ");
+        if(x == 9){
+          Serial.println();
+        }
+      }
+    }
+  }
 }
 
 void initilizeGPIOPins(){
@@ -1486,7 +1499,9 @@ void setVolume(){
   while(digitalRead(P1_RED_BTN) == HIGH){
       
     blinkIndicatorR(players[0]);
-    volume = 1 - (analogRead(P1_POT_COL) / 4095.0f);
+    if(audioFile == -1){
+      volume = 1 - (analogRead(P1_POT_COL) / 4095.0f);
+    }
     //Serial.println(volume);
     if(getPosition(P1_POT_COL) != volPosition){
       audioFile = Bloop_Sound;
