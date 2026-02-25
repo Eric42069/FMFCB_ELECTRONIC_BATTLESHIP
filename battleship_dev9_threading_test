@@ -169,16 +169,16 @@ struct PlayerHW {
 
 PlayerHW players[2] = {
   {
-    Adafruit_NeoPixel(LED_COUNT, P1_LED_PIN1, NEO_GRB + NEO_KHZ800 + NEO_RMT),
-    Adafruit_NeoPixel(LED_COUNT, P1_LED_PIN2, NEO_GRB + NEO_KHZ800 + NEO_RMT),
+    Adafruit_NeoPixel(LED_COUNT, P1_LED_PIN1, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(LED_COUNT, P1_LED_PIN2, NEO_GRB + NEO_KHZ800),
     P1_POT_ROW, P1_POT_COL,
     P1_GREEN_BTN, P1_RED_BTN,
     P1_GREEN_LED, P1_RED_LED,
     -1, -1, false
   },
   {
-    Adafruit_NeoPixel(LED_COUNT, P2_LED_PIN1, NEO_GRB + NEO_KHZ800 + NEO_RMT),
-    Adafruit_NeoPixel(LED_COUNT, P2_LED_PIN2, NEO_GRB + NEO_KHZ800 + NEO_RMT),
+    Adafruit_NeoPixel(LED_COUNT, P2_LED_PIN1, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(LED_COUNT, P2_LED_PIN2, NEO_GRB + NEO_KHZ800),
     P2_POT_ROW, P2_POT_COL,
     P2_GREEN_BTN, P2_RED_BTN,
     P2_GREEN_LED, P2_RED_LED,
@@ -467,8 +467,6 @@ void loop() {
   preInputCol = pl.inputCol;
   updateOcean();
   updateRipple();
-  stripShow();
-
 }
 
 void HitTaskCode(void * parameter){
@@ -645,6 +643,7 @@ void AudioTaskCode(void * parameter){
         default:
           break;
     }
+    vTaskDelay(1);
   }
 }
 
@@ -714,6 +713,7 @@ void refreshAimColors(PlayerHW &pl){
   for ( int i = 0; i < LED_COUNT; i++){
     pl.strip2.setPixelColor(i, pl.previousColors2[i]);
   }
+  stripShow();
 }
 
 void refreshOceanColors(PlayerHW &pl){
@@ -727,6 +727,7 @@ void preaim(PlayerHW &pl){
   int refCol = 0;
   pl.strip2.setPixelColor(indexConvert(pl.inputRow, refCol), 255, 255, 0);
   pl.strip2.setPixelColor(indexConvert(refRow, pl.inputCol), 255, 255, 0);
+  stripShow();
 }
 
 
@@ -759,10 +760,12 @@ void aiming(PlayerHW &pl){
     if (i <= (9 - aimRow)) pl.strip2.setPixelColor(indexConvert(aimRow + i, aimCol), 255, 255, 0);
 
     aimStep++;
+    stripShow();
 
     // Once done, highlight target and stop animation
     if (aimStep > aimMax) {
       refreshAimColors(pl);
+      stripShow();
       aimingActive = false;
       audioFile = Ping_Sound; 
     }
@@ -871,6 +874,7 @@ void hitLightUp(PlayerHW &pl, int r, int c) {
   pl.strip2.setPixelColor(indexConvert(r, c), 255, 0, 0);
   saveColors(pl);
   startRipple(pl, r, c);
+  stripShow();
   delay(500);
   gameState = WAITING_FOR_AIM;
 }
@@ -880,6 +884,7 @@ void missLightUp(PlayerHW &pl, int r, int c) {
   pl.strip2.setPixelColor(indexConvert(r, c), 127, 127, 127);
   saveColors(pl);
   startRipple(pl, r, c);
+  stripShow();
   endTurn();
 }
 
@@ -1263,7 +1268,7 @@ void updateOcean() {
   if (!oceanActive) return;
 
   // Faster frame rate (~40 FPS)
-  if (millis() - lastOceanUpdate < 100) return;
+  if (millis() - lastOceanUpdate < 150) return;
   lastOceanUpdate = millis();
   refreshOceanColors(players[0]);
   refreshOceanColors(players[1]);
@@ -1423,7 +1428,7 @@ void updateOcean() {
   } else {
     oceanTime += 0.14;
   }
-
+  stripShow();
 }
 
 void startRipple(PlayerHW &pl, int r, int c) {
@@ -1491,6 +1496,7 @@ void updateRipple() {
   if (rippleStrength < 0.05 || rippleRadius > 15) {
     rippleActive = false;
   }
+  stripShow();
 }
 
 void setVolume(){
@@ -1560,9 +1566,8 @@ void setBrightness(){
         }
       players[p].strip1.setBrightness(brightness);
       players[p].strip2.setBrightness(brightness);
-      players[p].strip1.show();
-      players[p].strip2.show();
     }
+    stripShow();
   }
   digitalWrite(P1_GREEN_LED, HIGH);
 }
