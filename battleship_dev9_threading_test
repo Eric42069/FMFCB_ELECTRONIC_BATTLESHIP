@@ -163,8 +163,8 @@ struct PlayerHW {
   int inputRow;
   int inputCol;
   bool aimingActive;
-  uint32_t previousColors1[LED_COUNT];
-  uint32_t previousColors2[LED_COUNT];
+  RgbColor previousColors1[LED_COUNT];
+  RgbColor previousColors2[LED_COUNT];
 };
 
 PlayerHW players[2] = {
@@ -341,8 +341,6 @@ void setup() {
     for (int i = 0; i < LED_COUNT; i++) {
       players[p].strip2.SetPixelColor(i, RgbColor(5, 75, 5));
     }
-    players[p].strip1.SetBrightness(255);
-    players[p].strip2.SetBrightness(255);
     players[p].strip1.Show();
     players[p].strip2.Show();
 
@@ -718,7 +716,7 @@ void refreshAimColors(PlayerHW &pl){
 
 void refreshOceanColors(PlayerHW &pl){
   for ( int i = 0; i < LED_COUNT; i++){
-    pl.strip1.setPixelColor(i, RgbColor(pl.previousColors1[i]));
+    pl.strip1.SetPixelColor(i, RgbColor(pl.previousColors1[i]));
   }
 }
 
@@ -1281,11 +1279,11 @@ void updateOcean() {
     for (int c = 0; c < 10; c++) {
 
       int idx = indexConvert(r, c);
-      RgbColor base = players[0].GetPixelColor(idx);
+      RgbColor base = players[0].strip1.GetPixelColor(idx);
 
-      uint8_t br = base.R
-      uint8_t bg = base.G
-      uint8_t bb = base.B
+      uint8_t br = base.R;
+      uint8_t bg = base.G;
+      uint8_t bb = base.B;
 
       // Only affect blue tiles
       if (br == 0 && bg == 0 && bb > 0) {
@@ -1355,11 +1353,11 @@ void updateOcean() {
     for (int c = 0; c < 10; c++) {
 
       int idx = indexConvert(r, c);
-      RgbColor base = players[1].GetPixelColor(idx);
+      RgbColor base = players[1].strip1.GetPixelColor(idx);
 
-      uint8_t br = base.R
-      uint8_t bg = base.G
-      uint8_t bb = base.B
+      uint8_t br = base.R;
+      uint8_t bg = base.G;
+      uint8_t bb = base.B;
 
       // Only affect blue tiles
       if (br == 0 && bg == 0 && bb > 0) {
@@ -1463,9 +1461,9 @@ void updateRipple() {
       // Read CURRENT pixel (already has ocean)
       RgbColor cur = players[ripplePlayer].strip1.GetPixelColor(idx);
 
-      uint8_t cr = cur.R
-      uint8_t cg = cur.G
-      uint8_t cb = cur.B
+      uint8_t cr = cur.R;
+      uint8_t cg = cur.G;
+      uint8_t cb = cur.B;
 
       // Distance from impact
       float dist = sqrt(
@@ -1562,13 +1560,11 @@ void setBrightness(){
       players[p].strip1.ClearTo(RgbColor(0,0,0));
       players[p].strip2.ClearTo(RgbColor(0,0,0));
       for (int i = 0; i < LED_COUNT; i++) {
-          players[p].strip1.SetPixelColor(i, RgbColor(0, 0, 255));
+          players[p].strip1.SetPixelColor(i, RgbColor((0 * brightness) / 255, (0 * brightness) / 255, (255 * brightness) / 255));
         }
       for (int i = 0; i < LED_COUNT; i++) {
-          players[p].strip2.SetPixelColor(i, RgbColor(5, 75, 5));
+          players[p].strip2.SetPixelColor(i, RgbColor((5 * brightness) / 255, (75 * brightness) / 255, (5 * brightness) / 255));
         }
-      players[p].strip1.SetBrightness(brightness);
-      players[p].strip2.SetBrightness(brightness);
       players[p].strip1.Show();
       players[p].strip2.Show();
     }
