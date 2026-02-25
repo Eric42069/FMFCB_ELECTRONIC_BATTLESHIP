@@ -149,10 +149,14 @@ void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]);
 
 void initrandomMatrix(Board &b);
 
+typedef NeoEsp32RmtMethodBase<NeoEsp32RmtSpeed800Kbps, NeoEsp32RmtChannel0> Rmt0;
+typedef NeoEsp32RmtMethodBase<NeoEsp32RmtSpeed800Kbps, NeoEsp32RmtChannel1> Rmt1;
+typedef NeoEsp32RmtMethodBase<NeoEsp32RmtSpeed800Kbps, NeoEsp32RmtChannel2> Rmt2;
+typedef NeoEsp32RmtMethodBase<NeoEsp32RmtSpeed800Kbps, NeoEsp32RmtChannel3> Rmt3;
 
 struct PlayerHW {
-  NeoPixelBus<NeoGrbFeature, NeoEsp32Rmt0800KbpsMethod> strip1;
-  NeoPixelBus<NeoGrbFeature, NeoEsp32Rmt0800KbpsMethod> strip2;
+  NeoPixelBus<NeoGrbFeature, Rmt0> strip1;
+  NeoPixelBus<NeoGrbFeature, Rmt1> strip2;
   int potRowPin;
   int potColPin;
   int greenBtn;
@@ -169,16 +173,16 @@ struct PlayerHW {
 
 PlayerHW players[2] = {
   {
-    NeoPixelBus<NeoGrbFeature, NeoEsp32Rmt0800KbpsMethod>(LED_COUNT, P1_LED_PIN1),
-    NeoPixelBus<NeoGrbFeature, NeoEsp32Rmt0800KbpsMethod>(LED_COUNT, P1_LED_PIN2),
+    NeoPixelBus<NeoGrbFeature, Rmt>0(LED_COUNT, P1_LED_PIN1),
+    NeoPixelBus<NeoGrbFeature, Rmt1>(LED_COUNT, P1_LED_PIN2),
     P1_POT_ROW, P1_POT_COL,
     P1_GREEN_BTN, P1_RED_BTN,
     P1_GREEN_LED, P1_RED_LED,
     -1, -1, false
   },
   {
-    NeoPixelBus<NeoGrbFeature, NeoEsp32Rmt0800KbpsMethod>(LED_COUNT, P2_LED_PIN1),
-    NeoPixelBus<NeoGrbFeature, NeoEsp32Rmt0800KbpsMethod>(LED_COUNT, P2_LED_PIN2),
+    NeoPixelBus<NeoGrbFeature, Rmt2>(LED_COUNT, P2_LED_PIN1),
+    NeoPixelBus<NeoGrbFeature, Rmt3>(LED_COUNT, P2_LED_PIN2),
     P2_POT_ROW, P2_POT_COL,
     P2_GREEN_BTN, P2_RED_BTN,
     P2_GREEN_LED, P2_RED_LED,
