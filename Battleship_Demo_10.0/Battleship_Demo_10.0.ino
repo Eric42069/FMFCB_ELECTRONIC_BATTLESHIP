@@ -101,8 +101,8 @@ static uint32_t  tempBufLen     = 0;
 static uint32_t  tempSampleRate = 0;
 
 TaskHandle_t audioTask;
-TaskHandle_t hitTask;
-TaskHandle_t missTask;
+// TaskHandle_t hitTask;
+// TaskHandle_t missTask;
 volatile int audioFile = -1;
 volatile bool readDone = true;
 
@@ -261,7 +261,7 @@ bool  aimingActive = false;
 unsigned long lastAimUpdate = 0;
 int   aimStep = 0, aimMax = 0, aimRow = 0, aimCol = 0;
 uint8_t brightness = 0;
-float   volume     = 0.75f;
+float   volume     = 0.75;
 volatile bool    stripUpdate  = false;
 int     ripplePlayer = -1;
 int     sensorValue  = 0;
@@ -275,24 +275,28 @@ bool          rippleActive     = false;
 unsigned long lastRippleUpdate = 0;
 int           rippleRow = 0, rippleCol = 0;
 float         rippleRadius = 0.0f, rippleStrength = 1.0f;
+bool hitShot = false;
+bool forceOcean = false;
+int check = 0;
+bool shipSunk = true;
 
 // ========================================================
 //  TASK CODE
 // ========================================================
 
-void HitTaskCode(void *parameter) {
-  PlayerHW &pl = players[activePlayer];
-  vTaskDelay(3400);
-  hitLightUp(pl, pl.inputRow, pl.inputCol);
-  vTaskDelete(NULL);
-}
+// void HitTaskCode(void *parameter) {
+//   PlayerHW &pl = players[activePlayer];
+//   vTaskDelay(3300);
+//   hitLightUp(pl, pl.inputRow, pl.inputCol);
+//   vTaskDelete(NULL);
+// }
 
-void MissTaskCode(void *parameter) {
-  PlayerHW &pl = players[activePlayer];
-  vTaskDelay(3400);
-  missLightUp(pl, pl.inputRow, pl.inputCol);
-  vTaskDelete(NULL);
-}
+// void MissTaskCode(void *parameter) {
+//   PlayerHW &pl = players[activePlayer];
+//   vTaskDelay(3300);
+//   missLightUp(pl, pl.inputRow, pl.inputCol);
+//   vTaskDelete(NULL);
+// }
 
 void AudioTaskCode(void *parameter) {
   for (;;) {
@@ -331,7 +335,6 @@ void setup() {
 #endif
 
   Serial.begin(115200);
-  pinMode(POT_PIN, INPUT);
 
   I2C_0.begin(I2C_SDA0, I2C_SCL0, 400000);
   I2C_1.begin(I2C_SDA1, I2C_SCL1, 400000);
@@ -373,11 +376,9 @@ void setup() {
     AudioTaskCode, "audioTask",
     10000, NULL, 0, &audioTask, 0
   );
+
   initilizeGPIOPins();
   LittleFS.begin();
-
-  Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
-  Serial.printf("Max alloc: %u bytes\n", ESP.getMaxAllocHeap());
 
   // Preload ping permanently into RAM — this is the only file kept in RAM at all times
   if (loadFileToRam(kPlaylist[Ping_Sound], pingBuf, pingBufLen, pingSampleRate)) {
@@ -475,6 +476,28 @@ void loop() {
       break;
 
     case STALL:
+      if (millis() - lastAimUpdate >= 3350) {
+        lastAimUpdate = millis();
+        if(hitShot){
+          hitLightUp(pl, pl.inputRow, pl.inputCol);
+        } else {
+          missLightUp(pl, pl.inputRow, pl.inputCol);
+        }
+        forceOcean = true;
+        if (shipSunk) {
+          switch (check) {
+            case orca:    audioFile = Orca_Sound;    break;
+            case sub:     audioFile = Sub_Sound;     break;
+            case AOPS:    audioFile = AOPS_Sound;    break;
+            case frigate: audioFile = Halifax_Sound; break;
+            case JSS:     audioFile = JSS_Sound;     break;
+          }
+        }
+        if (boards[0].remaining == 0 || boards[1].remaining == 0) {
+          gameState = GAME_OVER;
+          winSequence();
+        }
+      }
       break;
 
     case GAME_OVER:
@@ -595,7 +618,12 @@ void startOcean() {
 
 void updateOcean() {
   if (!oceanActive) return;
-  if (millis() - lastOceanUpdate < 100) return;
+  if(forceOcean == true) {
+    forceOcean = false;
+  } else {
+    if (millis() - lastOceanUpdate < 100) return;
+  }
+  
   lastOceanUpdate = millis();
 
   refreshOceanColors(players[0]);
@@ -749,53 +777,40 @@ bool commitShot(PlayerHW &pl) {
     return false;
   }
 
-  refreshOceanColors(pl);
+  //refreshOceanColors(pl);
   refreshAimColors(pl);
 
   int cell = enemy.ships[pl.inputRow][pl.inputCol];
   if (cell != 0 && cell != 1) {
     enemy.found[pl.inputRow][pl.inputCol] = true;
-    int check = cell;
+    check = cell;
     Serial.printf("check: %d\n", check);
     enemy.ships[pl.inputRow][pl.inputCol] = 1;
 
-    bool shipSunk = true;
+    shipSunk = true;
     for (uint8_t y = 0; y < boardSize && shipSunk; y++)
       for (uint8_t x = 0; x < boardSize && shipSunk; x++)
         if (enemy.ships[y][x] == check) shipSunk = false;
 
     audioFile = shipSunk ? Sunk_Sound : Hit_Sound;
     delay(1);
-    xTaskCreate(HitTaskCode, "hitTask", 10000, NULL, 1, &hitTask);
-
-    if (shipSunk) {
-      switch (check) {
-        case orca:    audioFile = Orca_Sound;    break;
-        case sub:     audioFile = Sub_Sound;     break;
-        case AOPS:    audioFile = AOPS_Sound;    break;
-        case frigate: audioFile = Halifax_Sound; break;
-        case JSS:     audioFile = JSS_Sound;     break;
-      }
-    }
+    hitShot = true;
 
     enemy.remaining--;
     Serial.println(enemy.remaining);
-    if (enemy.remaining == 0) {
-      gameState = GAME_OVER;
-      winSequence();
-    }
     return true;
   }
-
+  
+  hitShot = false;
   audioFile = Miss_Sound;
-  xTaskCreate(MissTaskCode, "missTask", 10000, NULL, 0, &missTask);
   return false;
 }
 
 void winSequence() {
   Serial.println("All targets found! You win!");
+  delay(3500);
   audioFile = Fleet_Destroyed_Sound;
-  delay(100);
+  delay(2000);
   audioFile = Victory_Sound;
 }
 
@@ -851,12 +866,10 @@ void setVolume() {
   int volPosition = getPosition(P1_POT_COL);
   while (digitalRead(P1_RED_BTN) == HIGH) {
     blinkIndicatorR(players[0]);
-    if (audioFile == -1) {
-      volume = 1.0f - (analogRead(P1_POT_COL) / 4095.0f);
-    }
     if (getPosition(P1_POT_COL) != volPosition) {
       audioFile   = Bloop_Sound;
       volPosition = getPosition(P1_POT_COL);
+      volume = 1.0f - (analogRead(P1_POT_COL) / 4095.0f);
     }
   }
   digitalWrite(P1_RED_LED, HIGH);
@@ -1153,5 +1166,7 @@ void playFromRam(const uint8_t* buf, uint32_t len) {
     size_t written;
     i2s_write(I2S_NUM_0, out, frames * 2 * sizeof(int16_t), &written, portMAX_DELAY);
     taskYIELD();
+    Serial.print("volume: ");
+    Serial.println(volume);
   }
 }
