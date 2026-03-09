@@ -31,6 +31,12 @@
 #define frigate 4
 #define JSS     5
 
+#define MAX_FIREWORKS 5
+#define MAX_PARTICLES 25
+
+#define PANEL_WIDTH 10
+#define PANEL_HEIGHT 10
+
 Adafruit_MCP23X17 mcp0[8];
 Adafruit_MCP23X17 mcp1[8];
 
@@ -206,7 +212,7 @@ static const char* kPlaylist[] = {
   "/audio/fleet_two_deployed.wav",             // 17 P2 Deployed
   "/audio/set_coordinance.wav",                // 18 Set Coordinates
   "/audio/single_player_mode.wav",             // 19 Single Player
-  "/audio/Wilhelm scream.wav",                 // 20 Wilhelm
+  "/audio/Wilhelm_scream.wav",                 // 20 Wilhelm
   "/audio/corordinance_locked_in_fire_when_ready.wav" // 21 Coordinates Locked
 };
 static const int kPlaylistLen = 22;
@@ -221,6 +227,29 @@ struct WavInfo {
   uint32_t dataOffset    = 0;
   uint32_t dataSize      = 0;
 };
+
+struct Particle {
+  float x;
+  float y;
+  float vx;
+  float vy;
+  uint8_t life;
+  uint32_t color;
+};
+
+struct Firework {
+  bool active;
+  bool exploded;
+
+  float x;
+  float y;
+  float vy;
+  int explodeY;
+
+  Particle particles[MAX_PARTICLES];
+};
+
+Firework fireworks[MAX_FIREWORKS];
 
 // -------- Forward declarations --------
 void refreshAimColors(PlayerHW &pl);
@@ -303,7 +332,6 @@ void AudioTaskCode(void *parameter) {
     if (audioFile >= 0 && audioFile < kPlaylistLen) {
       int toPlay = audioFile;
       audioFile  = -1;
-
       if (toPlay == Ping_Sound) {
         // Play directly from permanent RAM — no flash read at all
         if (pingBuf && pingBufLen > 0) {
@@ -318,6 +346,22 @@ void AudioTaskCode(void *parameter) {
           free(tempBuf);
           tempBuf    = nullptr;
           tempBufLen = 0;
+        }
+        if (toPlay == 5) {
+          int willhielm = random(68,71);
+          Serial.println(willhielm);
+          if(willhielm == 69){
+            if (loadFileToRam(kPlaylist[20], tempBuf, tempBufLen, tempSampleRate)) {
+              setupI2S(tempSampleRate);
+              playFromRam(tempBuf, tempBufLen);
+              free(tempBuf);
+              tempBuf    = nullptr;
+              tempBufLen = 0;
+            }
+          }
+          if(toPlay == Volume_Sound){
+            volume = 1.0f - (analogRead(P1_POT_COL) / 4095.0f);
+          }
         }
       }
     }
@@ -389,10 +433,10 @@ void setup() {
 
   randomSeed(analogRead(A0));
 
-  audioFile = Volume_Sound;
+  //audioFile = Volume_Sound;
   setVolume();
 
-  audioFile = Brightness_Sound;
+  //audioFile = Brightness_Sound;
   setBrightness();
 
   startOcean();
@@ -484,7 +528,9 @@ void loop() {
           missLightUp(pl, pl.inputRow, pl.inputCol);
         }
         forceOcean = true;
-        if (shipSunk) {
+        updateOcean();
+        stripShow();
+        if (hitShot && shipSunk) {
           switch (check) {
             case orca:    audioFile = Orca_Sound;    break;
             case sub:     audioFile = Sub_Sound;     break;
@@ -501,6 +547,8 @@ void loop() {
       break;
 
     case GAME_OVER:
+      gameOverSkull();
+      gameOverFireworks();
       break;
   }
 
@@ -542,9 +590,11 @@ void refreshOceanColors(PlayerHW &pl) {
 }
 
 void preaim(PlayerHW &pl) {
+  if( millis() - lastAimUpdate >= 1000){
   pl.strip2.setPixelColor(indexConvert(pl.inputRow, 0), 255, 255, 0);
   pl.strip2.setPixelColor(indexConvert(0, pl.inputCol), 255, 255, 0);
   stripUpdate = true;
+  }
 }
 
 void aiming(PlayerHW &pl) {
@@ -812,6 +862,8 @@ void winSequence() {
   audioFile = Fleet_Destroyed_Sound;
   delay(2000);
   audioFile = Victory_Sound;
+  players[0].strip2.fill(players[0].strip2.Color(5, 75, 5), 0, LED_COUNT);
+  players[1].strip2.fill(players[1].strip2.Color(5, 75, 5), 0, LED_COUNT);
 }
 
 // ========================================================
@@ -863,21 +915,36 @@ bool buttonPressed(int pin) {
 // ========================================================
 
 void setVolume() {
+  audioFile = Volume_Sound;
   int volPosition = getPosition(P1_POT_COL);
+  unsigned long volumeRepeat = millis();
   while (digitalRead(P1_RED_BTN) == HIGH) {
     blinkIndicatorR(players[0]);
+    if(millis() - volumeRepeat >= 5000){
+      volume = 0.75;
+      audioFile = Volume_Sound;
+      volumeRepeat = millis();
+    }
     if (getPosition(P1_POT_COL) != volPosition) {
       audioFile   = Bloop_Sound;
       volPosition = getPosition(P1_POT_COL);
       volume = 1.0f - (analogRead(P1_POT_COL) / 4095.0f);
+      volumeRepeat = millis();
     }
   }
+  volume = 1.0f - (analogRead(P1_POT_COL) / 4095.0f);
   digitalWrite(P1_RED_LED, HIGH);
 }
 
 void setBrightness() {
+  audioFile = Brightness_Sound;
   const uint8_t levels[10] = {0, 25, 55, 80, 105, 130, 155, 180, 205, 255};
+  unsigned long brightnessRepeat = millis();
   while (digitalRead(P1_GREEN_BTN) == HIGH) {
+    if(millis() - brightnessRepeat >= 5000){
+        audioFile = Brightness_Sound;
+        brightnessRepeat = millis();
+    }
     blinkIndicatorG(players[0]);
     brightness = levels[getPosition(P1_POT_ROW)];
     for (int p = 0; p < 2; p++) {
@@ -967,7 +1034,7 @@ void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[]) {
       delay(250);
     }
   }
-  b.remaining = 17;
+  b.remaining = 2;
 }
 
 void initrandomMatrix(Board &b) {
@@ -1166,7 +1233,219 @@ void playFromRam(const uint8_t* buf, uint32_t len) {
     size_t written;
     i2s_write(I2S_NUM_0, out, frames * 2 * sizeof(int16_t), &written, portMAX_DELAY);
     taskYIELD();
-    Serial.print("volume: ");
-    Serial.println(volume);
+  }
+}
+
+void gameOverSkull() {
+
+  static int16_t offset = -PANEL_WIDTH;
+  static uint32_t lastUpdate = 0;
+  static bool jawOpen = false;
+  static uint8_t jawTimer = 0;
+
+  if (millis() - lastUpdate < 80) return;  // slower scroll (was 60)
+  lastUpdate = millis();
+  refreshAimColors(players[otherPlayer(activePlayer)]);
+
+// toggle jaw more frequently
+  jawTimer++;
+  if (jawTimer > 2) {   // was 8
+    jawTimer = 0;
+    jawOpen = !jawOpen;
+  }
+
+  const uint8_t skullTop[6][10] = {
+  {0,0,1,1,1,1,1,1,1,0},
+  {0,1,1,0,1,1,1,0,1,1},
+  {0,1,1,0,2,1,2,0,1,1},
+  {0,1,1,1,1,1,1,1,1,1},
+  {0,1,1,1,1,0,1,1,1,1},
+  {0,0,1,1,1,1,1,1,1,0}
+  };
+
+  const uint8_t jawClosed[4][10] = {
+  {0,0,1,0,1,0,1,0,1,0},
+  {0,0,0,1,0,1,0,1,0,0},
+  {0,0,1,1,1,1,1,1,1,0},
+  {0,0,0,0,0,0,0,0,0,0}
+  };
+
+  const uint8_t jawOpenData[4][10] = {
+  {0,0,1,0,1,0,1,0,1,0},
+  {0,0,0,0,0,0,0,0,0,0},
+  {0,0,0,1,0,1,0,1,0,0},
+  {0,0,1,1,1,1,1,1,1,0}
+  };
+
+    // draw skull top
+  for(int y = 0; y < 6; y++){
+    for(int x = 0; x < 10; x++){
+
+      if(!skullTop[y][x]) continue;
+
+      int drawX = x + offset;
+      if(drawX < 0 || drawX >= PANEL_WIDTH) continue;
+
+      uint32_t color = players[otherPlayer(activePlayer)].strip2.Color(255,255,255);
+
+      if(skullTop[y][x] == 2){
+      color = players[otherPlayer(activePlayer)].strip2.Color(255, 0, 0);
+      }
+      // row = y, column = drawX
+      players[otherPlayer(activePlayer)].strip2.setPixelColor(indexConvert(y, drawX), color);
+    }
+  }
+
+  // draw jaw
+  for(int y = 0; y < 4; y++){
+    for(int x = 0; x < 10; x++){
+
+      uint8_t val = jawOpen ? jawOpenData[y][x] : jawClosed[y][x];
+      if(!val) continue;
+
+      int drawX = x + offset;
+      int drawY = y + 6;
+
+      if(drawX < 0 || drawX >= PANEL_WIDTH) continue;
+
+      // row = drawY, column = drawX
+      players[otherPlayer(activePlayer)].strip2.setPixelColor(indexConvert(drawY, drawX), players[otherPlayer(activePlayer)].strip2.Color(255,255,255));
+    }
+  }
+
+  offset++;
+  if(offset > PANEL_WIDTH)
+    offset = -10;
+
+}
+
+void gameOverFireworks() {
+
+  static uint32_t lastUpdate = 0;
+  if(millis() - lastUpdate < 50) return;
+  lastUpdate = millis();
+
+  refreshAimColors(players[activePlayer]);
+
+  static uint32_t lastLaunch = 0;
+
+  for(int i=0;i<MAX_FIREWORKS;i++){
+
+    Firework &f = fireworks[i];
+
+    if(!f.active){
+
+      if(millis() - lastLaunch < 600) continue;
+
+      if(random(100) < 4){
+        f.active = true;
+        f.exploded = false;
+
+        f.x = random(PANEL_WIDTH);
+        f.y = PANEL_HEIGHT - 1;
+        f.vy = -0.6;
+        f.explodeY = random(2, PANEL_HEIGHT / 2);
+
+        lastLaunch = millis();
+      }
+
+      continue;
+    }
+
+    if(!f.exploded){
+
+      players[activePlayer].strip2.setPixelColor(
+        indexConvert((int)f.y,(int)f.x),
+        players[activePlayer].strip2.Color(255,180,80)
+      );
+
+      f.y += f.vy;
+
+      if(f.y <= f.explodeY){
+
+        f.exploded = true;
+
+        // Choose one palette color for this explosion
+        uint8_t colorChoice = random(5);
+        uint32_t explodeColor;
+
+        switch(colorChoice){
+          case 0: explodeColor = players[activePlayer].strip2.Color(255,0,0); break;   // red
+          case 1: explodeColor = players[activePlayer].strip2.Color(0,0,255); break;   // blue
+          case 2: explodeColor = players[activePlayer].strip2.Color(255,255,0); break; // yellow
+          case 3: explodeColor = players[activePlayer].strip2.Color(255,120,0); break; // orange
+          case 4: explodeColor = players[activePlayer].strip2.Color(255,20,147); break;// pink
+        }
+
+        for(int p=0;p<MAX_PARTICLES;p++){
+
+          float angle = random(360) * 0.01745;
+          float speed = random(10,40) / 40.0;
+
+          f.particles[p] = {
+            f.x,
+            f.y,
+            cos(angle) * speed,
+            sin(angle) * speed,
+            random(12,20),  // lifespan
+            explodeColor
+          };
+        }
+      }
+
+    } else {
+
+      int alive = 0;
+
+      for(int p=0;p<MAX_PARTICLES;p++){
+
+        Particle &pt = f.particles[p];
+
+        if(pt.life == 0) continue;
+
+        alive++;
+
+        pt.x += pt.vx;
+        pt.y += pt.vy;
+
+        pt.vy += 0.03; // gravity
+
+        pt.life--;
+
+        if(random(100) < 25) continue; // sparkle flicker
+
+        int px = (int)pt.x;
+        int py = (int)pt.y;
+
+        if(px >= 0 && px < PANEL_WIDTH && py >= 0 && py < PANEL_HEIGHT){
+
+          // fade calculation
+          uint8_t fade = pt.life * 12;
+
+          uint32_t color = players[activePlayer].strip2.Color(
+            ((pt.color >> 16) & 255) * fade / 255,
+            ((pt.color >> 8) & 255) * fade / 255,
+            ((pt.color & 255) * fade / 255)
+          );
+
+          uint32_t current = players[activePlayer].strip2.getPixelColor(indexConvert(py, px));
+
+          uint8_t g = (current >> 8) & 0xFF;
+          uint8_t r = (current >> 16) & 0xFF;
+          uint8_t b = current & 0xFF;
+
+          // don't overwrite green background
+          if(!(g > 0 && r == 0 && b == 0)){
+            players[activePlayer].strip2.setPixelColor(
+              indexConvert(py, px),
+              color
+            );
+          }
+        }
+      }
+
+      if(alive == 0)
+        f.active = false;
+    }
   }
 }
