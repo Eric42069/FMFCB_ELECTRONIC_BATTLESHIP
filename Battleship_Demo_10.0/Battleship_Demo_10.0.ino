@@ -34,6 +34,13 @@
 #define MAX_FIREWORKS 5
 #define MAX_PARTICLES 25
 
+#define MAX_QUEUE 5
+#define HIT 1
+#define MISS 9
+#define UNKNOWN 1
+#define HORIZONTAL 2
+#define VERTICAL 3
+
 #define PANEL_WIDTH 10
 #define PANEL_HEIGHT 10
 
@@ -93,30 +100,29 @@ static const int I2S_DOUT = 14;
 static const int POT_PIN  =  5;
 
 // ===== I2S state =====
-static uint32_t g_rate       = 0;
-static bool     i2s_installed = false;
+static uint32_t g_rate = 0;
+static bool i2s_installed = false;
 
 // ===== Permanent ping buffer =====
-static uint8_t*  pingBuf        = nullptr;
-static uint32_t  pingBufLen     = 0;
+static uint8_t*  pingBuf = nullptr;
+static uint32_t  pingBufLen = 0;
 static uint32_t  pingSampleRate = 0;
 
 // ===== Temporary per-sound buffer =====
-static uint8_t*  tempBuf        = nullptr;
-static uint32_t  tempBufLen     = 0;
+static uint8_t*  tempBuf = nullptr;
+static uint32_t  tempBufLen = 0;
 static uint32_t  tempSampleRate = 0;
 
 TaskHandle_t audioTask;
-// TaskHandle_t hitTask;
-// TaskHandle_t missTask;
+
 volatile int audioFile = -1;
 volatile bool readDone = true;
 
-enum Player    { PLAYER_1 = 0, PLAYER_2 = 1 };
+enum Player { PLAYER_1 = 0, PLAYER_2 = 1 };
 enum GameState { WAITING_FOR_AIM, STALL, WAITING_FOR_CONFIRM, GAME_OVER };
 
-Player    activePlayer = PLAYER_1;
-GameState gameState    = WAITING_FOR_AIM;
+Player activePlayer = PLAYER_1;
+GameState gameState = WAITING_FOR_AIM;
 
 Player otherPlayer(Player p) { return (p == PLAYER_1) ? PLAYER_2 : PLAYER_1; }
 
@@ -147,14 +153,17 @@ const uint8_t gpioDeviceArray[boardSize][boardSize] = {
 };
 
 struct Board {
-  int  ships[10][10];
-  bool found[10][10];
-  int  remaining = 0;
+  int ships[10][10];
+  int cheatSheet[10][10];
+  int found[10][10];
+  int remaining = 0;
 };
+
 Board boards[2];
 
+
 bool detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[], uint8_t player);
-void initrandomMatrix(Board &b);
+bool initrandomMatrix(Board &b);
 
 struct PlayerHW {
   Adafruit_NeoPixel strip1;
@@ -289,43 +298,52 @@ bool  aimingActive = false;
 unsigned long lastAimUpdate = 0;
 int   aimStep = 0, aimMax = 0, aimRow = 0, aimCol = 0;
 uint8_t brightness = 0;
-float   volume     = 0.75;
-volatile bool    stripUpdate  = false;
-int     ripplePlayer = -1;
-int     sensorValue  = 0;
+float volume = 0.75;
+volatile bool stripUpdate = false;
+int ripplePlayer = -1;
+int sensorValue = 0;
 
-bool          oceanActive     = false;
+bool oceanActive = false;
 unsigned long lastOceanUpdate = 0;
-float         oceanTime       = 0.0f;
-int           storm           = 0;
+float oceanTime = 0.0f;
+int storm = 0;
 
-bool          rippleActive     = false;
+bool rippleActive = false;
 unsigned long lastRippleUpdate = 0;
-int           rippleRow = 0, rippleCol = 0;
-float         rippleRadius = 0.0f, rippleStrength = 1.0f;
+int rippleRow = 0, rippleCol = 0;
+float rippleRadius = 0.0f, rippleStrength = 1.0f;
 bool hitShot = false;
 bool forceOcean = false;
 int check = 0;
-bool shipSunk = true;
+bool shipSunk = false;
 unsigned long gameOverUpdate = false;
+bool singlePlayer = false;
 
-// ========================================================
-//  TASK CODE
-// ========================================================
+uint8_t smallestShipAlive = 2;
+bool firstThreeSunk = false;
+bool orcaHit = false;
+bool subHit = false;
+bool aopsHit = false;
+bool halifaxHit = false;
+bool jssHit = false;
+bool firstScan = true;
 
-// void HitTaskCode(void *parameter) {
-//   PlayerHW &pl = players[activePlayer];
-//   vTaskDelay(3300);
-//   hitLightUp(pl, pl.inputRow, pl.inputCol);
-//   vTaskDelete(NULL);
-// }
+struct Point {
+  uint8_t r;
+  uint8_t c;
+};
 
-// void MissTaskCode(void *parameter) {
-//   PlayerHW &pl = players[activePlayer];
-//   vTaskDelay(3300);
-//   missLightUp(pl, pl.inputRow, pl.inputCol);
-//   vTaskDelete(NULL);
-// }
+Point targetQueue[MAX_QUEUE];
+Point firstHit;     // first successful hit
+Point lastHit;      // most recent hit
+
+uint8_t queueSize = 0;
+int targetCounter = 0;
+
+//enum Orientation { UNKNOWN, HORIZONTAL, VERTICAL };
+int shipOrientation = UNKNOWN;
+
+bool huntingMode = true;
 
 void AudioTaskCode(void *parameter) {
   for (;;) {
@@ -379,6 +397,10 @@ void setup() {
   clock_prescale_set(clock_div_1);
 #endif
 
+  activePlayer = PLAYER_1;
+  gameState = WAITING_FOR_AIM;
+  singlePlayer = false;
+
   Serial.begin(115200);
 
   I2C_0.begin(I2C_SDA0, I2C_SCL0, 400000);
@@ -417,13 +439,15 @@ void setup() {
     digitalWrite(players[p].redLED,   LOW);
   }
 
+  initilizeGPIOPins();
+  LittleFS.begin();
+
   xTaskCreatePinnedToCore(
     AudioTaskCode, "audioTask",
     10000, NULL, 0, &audioTask, 0
   );
 
-  initilizeGPIOPins();
-  LittleFS.begin();
+  delay(4000);
 
   // Preload ping permanently into RAM — this is the only file kept in RAM at all times
   if (loadFileToRam(kPlaylist[Ping_Sound], pingBuf, pingBufLen, pingSampleRate)) {
@@ -432,7 +456,7 @@ void setup() {
     Serial.println("Ping preload failed!");
   }
 
-  randomSeed(analogRead(A0));
+  randomSeed(esp_random());
 
   audioFile = Volume_Sound;
   setVolume();
@@ -442,26 +466,69 @@ void setup() {
 
   startOcean();
   audioFile = Deploy_Sound;
-  delay(100);
+  delay(2000);
 
+  int adminCount = 0;
+  unsigned long holdCheck = 0;
   bool d1 = false;
   bool d2 = false;
+  bool redeploy1 = true;
+  bool redeploy2 = true;
 
   while(!d1 || !d2){
-    if(!d1) {
+    if(digitalRead(P1_GREEN_BTN) == LOW && getPosition(P1_POT_COL) == 1 && getPosition(P1_POT_ROW) == 1){
+      if(buttonPressed(P1_RED_BTN)){
+        adminCount++;
+        Serial.println(adminCount);
+      }
+    }
+    if(digitalRead(P1_RED_BTN) == LOW && digitalRead(P1_GREEN_BTN) == LOW){
+      if(millis() - holdCheck >= 5000){
+        singlePlayer = true;
+        audioFile = Single_Player_Sound;
+        players[0].strip1.clear();
+        players[1].strip2.clear();
+        players[0].strip1.show();
+        players[1].strip2.show();
+      }
+    } else {
+      holdCheck = millis();
+    }
       d1 = detectShipPositions(boards[0], mcp0, 1);
-      if(d1) {
+      if(d1 && redeploy1) {
         audioFile = P1_Deployed_Sound;
-        for (int i = 0; i < LED_COUNT; i++) players[1].strip1.setPixelColor(i, 0, 0, 255);
+        Serial.println("1 Deployed");
+        redeploy1 = false;
+      } else if (!d1) {
+        redeploy1 = true;
+      }
+      if(!singlePlayer){
+        d2 = detectShipPositions(boards[1], mcp1, 0);
+        if(d2 && redeploy2){
+          audioFile = P2_Deployed_Sound;
+          Serial.println("2 Deployed");
+          redeploy2 = false;
+        } else if (!d2){
+          redeploy2 = true;
+        }
+      } else {
+        d2 = initrandomMatrix(boards[1]);
+      }
+    firstScan = false;
+  }
+
+  if(adminCount >= 3){
+    for (uint8_t y = 0; y < boardSize; y++) {
+      for (uint8_t x = 0; x < boardSize; x++) {
+        if(boards[1].ships[y][x] != 0){
+          players[0].strip2.setPixelColor(indexConvert(y,x), 2, 75, 2);
+        }
       }
     }
-    if(!d2) {
-      d2 = detectShipPositions(boards[1], mcp1, 0);
-      if(d2){
-        audioFile = P2_Deployed_Sound;
-        for (int i = 0; i < LED_COUNT; i++) players[0].strip1.setPixelColor(i, 0, 0, 255);
-      }
-    }
+  }
+
+  for(int p = 0; p < 2; p++){
+    for (int i = 0; i < LED_COUNT; i++) players[p].strip1.setPixelColor(i, 0, 0, 255);
   }
   
   saveColors(players[0]);
@@ -479,113 +546,283 @@ void setup() {
   Serial.println("Starting Game");
   stripUpdate = true;
   delay(3500);
+  if(singlePlayer){
+    onePlayer();
+  } else {
+    twoPlayer();
+  }
+}
+
+void loop(){
+
 }
 
 // ========================================================
-//  LOOP
+//  TWO PLAYER MODE
 // ========================================================
 
-void loop() {
-  PlayerHW &pl = players[activePlayer];
+void twoPlayer() {
+  while(1){
+    PlayerHW &pl = players[activePlayer];
 
-  if (gameState != STALL) {
-    pl.inputRow = getPosition(pl.potRowPin);
-    pl.inputCol = getPosition(pl.potColPin);
-  }
+    if (gameState != STALL) {
+      pl.inputRow = getPosition(pl.potRowPin);
+      pl.inputCol = getPosition(pl.potColPin);
+    }
 
-  bool green = buttonPressed(pl.greenBtn);
-  bool red   = buttonPressed(pl.redBtn);
+    bool green = buttonPressed(pl.greenBtn);
+    bool red   = buttonPressed(pl.redBtn);
 
-  switch (gameState) {
+    switch (gameState) {
 
-    case WAITING_FOR_AIM:
-      blinkIndicatorG(pl);
-      if (green) {
-        gameState = WAITING_FOR_CONFIRM;
-        digitalWrite(pl.greenLED, HIGH);
-      }
-      if (pl.inputRow != preInputRow || pl.inputCol != preInputCol) {
-        refreshAimColors(pl);
-      }
-      preaim(pl);
-      break;
-
-    case WAITING_FOR_CONFIRM:
-      aiming(pl);
-      blinkIndicatorR(pl);
-      if (red) {
-        refreshAimColors(pl);
-        pl.strip2.show();
-        bool hit = commitShot(pl);
-        aimingActive = false;
-
-        if (!hit) {
-          digitalWrite(pl.redLED,   LOW);
-          digitalWrite(pl.greenLED, LOW);
-          gameState = STALL;
-        } else if (gameState != GAME_OVER) {
-          gameState = STALL;
-          digitalWrite(pl.redLED,   LOW);
-          digitalWrite(pl.greenLED, LOW);
+      case WAITING_FOR_AIM:
+        blinkIndicatorG(pl);
+        if (green) {
+          gameState = WAITING_FOR_CONFIRM;
+          digitalWrite(pl.greenLED, HIGH);
         }
-      }
-      if (pl.inputRow != preInputRow || pl.inputCol != preInputCol) {
-        gameState    = WAITING_FOR_AIM;
-        aimingActive = false;
-        refreshAimColors(pl);
-      }
-      break;
-
-    case STALL:
-      if (millis() - lastAimUpdate >= 3350) {
-        lastAimUpdate = millis();
-        if(hitShot){
-          hitLightUp(pl, pl.inputRow, pl.inputCol);
-        } else {
-          missLightUp(pl, pl.inputRow, pl.inputCol);
+        if (pl.inputRow != preInputRow || pl.inputCol != preInputCol) {
+          refreshAimColors(pl);
         }
-        forceOcean = true;
-        updateOcean();
-        stripShow();
-        if (hitShot && shipSunk) {
-          switch (check) {
-            case orca:    audioFile = Orca_Sound;    break;
-            case sub:     audioFile = Sub_Sound;     break;
-            case AOPS:    audioFile = AOPS_Sound;    break;
-            case frigate: audioFile = Halifax_Sound; break;
-            case JSS:     audioFile = JSS_Sound;     break;
+        preaim(pl);
+        break;
+
+      case WAITING_FOR_CONFIRM:
+        aiming(pl);
+        blinkIndicatorR(pl);
+        if (red) {
+          refreshAimColors(pl);
+          pl.strip2.show();
+          bool hit = commitShot(pl);
+          aimingActive = false;
+
+            digitalWrite(pl.redLED,   LOW);
+            digitalWrite(pl.greenLED, LOW);
+            gameState = STALL;
+
+            // if (!hit) {
+            //   digitalWrite(pl.redLED,   LOW);
+            //   digitalWrite(pl.greenLED, LOW);
+            //   gameState = STALL;
+            // } else if (gameState != GAME_OVER) {
+            //   gameState = STALL;
+            //   digitalWrite(pl.redLED,   LOW);
+            //   digitalWrite(pl.greenLED, LOW);
+            // }
+        }
+        if (pl.inputRow != preInputRow || pl.inputCol != preInputCol) {
+          gameState    = WAITING_FOR_AIM;
+          aimingActive = false;
+          refreshAimColors(pl);
+        }
+        break;
+
+      case STALL:
+        if (millis() - lastAimUpdate >= 3350) {
+          lastAimUpdate = millis();
+          if(hitShot){
+            hitLightUp(pl, pl.inputRow, pl.inputCol);
+          } else {
+            missLightUp(pl, pl.inputRow, pl.inputCol);
+          }
+          forceOcean = true;
+          updateOcean();
+          stripShow();
+          if (hitShot && shipSunk) {
+            switch (check) {
+              case orca:    audioFile = Orca_Sound;    break;
+              case sub:     audioFile = Sub_Sound;     break;
+              case AOPS:    audioFile = AOPS_Sound;    break;
+              case frigate: audioFile = Halifax_Sound; break;
+              case JSS:     audioFile = JSS_Sound;     break;
+            }
+          }
+          if (boards[0].remaining == 0 || boards[1].remaining == 0) {
+            Serial.println("All targets found! You win!");
+            gameState = GAME_OVER;
+            gameOverUpdate = millis();
           }
         }
-        if (boards[0].remaining == 0 || boards[1].remaining == 0) {
-          Serial.println("All targets found! You win!");
-          gameState = GAME_OVER;
-          gameOverUpdate = millis();
+        break;
+
+      case GAME_OVER:
+        if (millis() - gameOverUpdate >= 4000 && millis() - gameOverUpdate <= 4100) {
+          audioFile = Fleet_Destroyed_Sound;
         }
-      }
-      break;
+        if (millis() - gameOverUpdate >= 6000 && millis() - gameOverUpdate <= 11000) {
+          audioFile = Victory_Sound;
+        }
+        if (millis() - gameOverUpdate >= 4000) {
+          gameOverSkull();
+          gameOverFireworks();
+        }
+        if(digitalRead(P1_RED_BTN) == LOW && digitalRead(P1_GREEN_BTN) == LOW){
+          setup();
+        }
+        break;
+    }
 
-    case GAME_OVER:
-      if (millis() - gameOverUpdate >= 4000 && millis() - gameOverUpdate <= 4100) {
-        audioFile = Fleet_Destroyed_Sound;
-      }
-      if (millis() - gameOverUpdate >= 6000 && millis() - gameOverUpdate <= 11000) {
-        audioFile = Victory_Sound;
-      }
-      if (millis() - gameOverUpdate >= 4000) {
-        gameOverSkull();
-        gameOverFireworks();
-      }
-      break;
+    preInputRow = pl.inputRow;
+    preInputCol = pl.inputCol;
+    updateOcean();
+    updateRipple();
+
+    if (stripUpdate && readDone) {
+      stripShow();
+      stripUpdate = false;
+    }
   }
+}
 
-  preInputRow = pl.inputRow;
-  preInputCol = pl.inputCol;
-  updateOcean();
-  updateRipple();
+// ========================================================
+//  ONE PLAYER MODE
+// ========================================================
 
-  if (stripUpdate && readDone) {
-    stripShow();
-    stripUpdate = false;
+void onePlayer() {
+  unsigned long AIDelay = 0;
+  while(1){
+    bool green;
+    bool red;
+    PlayerHW &pl = players[activePlayer];
+
+    if (gameState != STALL && activePlayer == 0) {
+      pl.inputRow = getPosition(pl.potRowPin);
+      pl.inputCol = getPosition(pl.potColPin);
+    }
+
+    if(activePlayer == 0){
+      green = buttonPressed(pl.greenBtn);
+      red   = buttonPressed(pl.redBtn);
+    }
+
+    switch (gameState) {
+
+      case WAITING_FOR_AIM:
+        if(activePlayer == PLAYER_2){
+          gameState = WAITING_FOR_CONFIRM;
+        }
+        blinkIndicatorG(pl);
+        if (green) {
+          gameState = WAITING_FOR_CONFIRM;
+          digitalWrite(pl.greenLED, HIGH);
+        }
+        if (pl.inputRow != preInputRow || pl.inputCol != preInputCol) {
+          refreshAimColors(pl);
+        }
+        preaim(pl);
+        break;
+
+      case WAITING_FOR_CONFIRM:
+        if(activePlayer == PLAYER_2){
+          if (millis() - lastAimUpdate >= AIDelay && readDone){
+            lastAimUpdate = millis();
+            AI();
+          }
+        } else {
+          aiming(pl);
+          blinkIndicatorR(pl);
+          if (red) {
+            refreshAimColors(pl);
+            pl.strip2.show();
+            bool hit = commitShot(pl);
+            aimingActive = false;
+
+            digitalWrite(pl.redLED,   LOW);
+            digitalWrite(pl.greenLED, LOW);
+            gameState = STALL;
+
+            // if (!hit) {
+            //   digitalWrite(pl.redLED,   LOW);
+            //   digitalWrite(pl.greenLED, LOW);
+            //   gameState = STALL;
+            // } else if (gameState != GAME_OVER) {
+            //   gameState = STALL;
+            //   digitalWrite(pl.redLED,   LOW);
+            //   digitalWrite(pl.greenLED, LOW);
+            // }
+          }
+          if (pl.inputRow != preInputRow || pl.inputCol != preInputCol) {
+            gameState = WAITING_FOR_AIM;
+            aimingActive = false;
+            refreshAimColors(pl);
+          }
+        }
+        break;
+
+      case STALL:
+        if (millis() - lastAimUpdate >= 3350) {
+          if(activePlayer == 1){
+            AIDelay = 2000;
+          }
+          Serial.println("In Stall");
+          lastAimUpdate = millis();
+          if(hitShot){
+            hitLightUp(pl, pl.inputRow, pl.inputCol);
+          } else {
+            missLightUp(pl, pl.inputRow, pl.inputCol);
+          }
+          forceOcean = true;
+          updateOcean();
+          stripShow();
+          if (hitShot && shipSunk) {
+            if(activePlayer == 1){
+              AIDelay = 5000;
+            }
+            switch (check) {
+              case orca:    audioFile = Orca_Sound;    break;
+              case sub:     audioFile = Sub_Sound;     break;
+              case AOPS:    audioFile = AOPS_Sound;    break;
+              case frigate: audioFile = Halifax_Sound; break;
+              case JSS:     audioFile = JSS_Sound;     break;
+            }
+            if(smallestShipAlive == 3 || smallestShipAlive == 6 && firstThreeSunk == false){
+              smallestShipAlive = 3;
+              firstThreeSunk = true;
+            } 
+            else if(smallestShipAlive == 3 || smallestShipAlive == 6 && firstThreeSunk == true){
+              smallestShipAlive = 4;
+            }
+            else if(smallestShipAlive == check){
+              smallestShipAlive++;
+            }
+          } 
+          shipSunk = false;
+          if (boards[0].remaining == 0 || boards[1].remaining == 0) {
+            Serial.println("All targets found! You win!");
+            gameState = GAME_OVER;
+            gameOverUpdate = millis();
+          }
+        }
+        break;
+
+      case GAME_OVER:
+        if (millis() - gameOverUpdate >= 4000 && millis() - gameOverUpdate <= 4100) {
+          audioFile = Fleet_Destroyed_Sound;
+        }
+        if (millis() - gameOverUpdate >= 6000 && millis() - gameOverUpdate <= 11000) {
+          audioFile = Victory_Sound;
+        }
+        if (millis() - gameOverUpdate >= 4000) {
+          gameOverSkull();
+          gameOverFireworks();
+        }
+        if(digitalRead(P1_RED_BTN) == LOW && digitalRead(P1_GREEN_BTN) == LOW){
+          setup();
+        }
+        break;
+    }
+
+    if(activePlayer == 0){
+      preInputRow = pl.inputRow;
+      preInputCol = pl.inputCol;
+    }
+    updateOcean();
+    updateRipple();
+
+    if (stripUpdate && readDone) {
+      stripShow();
+      stripUpdate = false;
+    }
   }
 }
 
@@ -594,10 +831,15 @@ void loop() {
 // ========================================================
 
 void stripShow() {
-  players[0].strip1.show();
-  players[0].strip2.show();
-  players[1].strip1.show();
-  players[1].strip2.show();
+  if(singlePlayer){
+    players[0].strip2.show();
+    players[1].strip1.show();
+  } else {
+    players[0].strip1.show();
+    players[0].strip2.show();
+    players[1].strip1.show();
+    players[1].strip2.show();
+  }
 }
 
 void saveColors(PlayerHW &pl) {
@@ -665,7 +907,11 @@ void hitLightUp(PlayerHW &pl, int r, int c) {
   saveColors(pl);
   startRipple(pl, r, c);
   stripUpdate = true;
-  gameState   = WAITING_FOR_AIM;
+  if(singlePlayer && activePlayer == 1){
+    gameState = WAITING_FOR_CONFIRM;
+  } else {
+    gameState = WAITING_FOR_AIM;
+  }
 }
 
 void missLightUp(PlayerHW &pl, int r, int c) {
@@ -835,11 +1081,15 @@ void blinkIndicatorG(PlayerHW &pl) {
 // ========================================================
 
 void endTurn() {
-  aimingActive = false;
-  players[activePlayer].inputRow = -1;
-  players[activePlayer].inputCol = -1;
+  if(singlePlayer && activePlayer == 0){
+    gameState = WAITING_FOR_CONFIRM;
+  } else {
+    gameState = WAITING_FOR_AIM;
+  }
+  //players[activePlayer].inputRow = -1;
+  //players[activePlayer].inputCol = -1;
   activePlayer = otherPlayer(activePlayer);
-  gameState    = WAITING_FOR_AIM;
+  aimingActive = false;
 }
 
 bool commitShot(PlayerHW &pl) {
@@ -848,38 +1098,64 @@ bool commitShot(PlayerHW &pl) {
 
   Board &enemy = boards[otherPlayer(activePlayer)];
 
-  if (enemy.found[pl.inputRow][pl.inputCol]) {
-    endTurn();
-    return false;
-  }
+  // if (enemy.found[pl.inputRow][pl.inputCol] == HIT) {
+  //   //endTurn();
+  //   return false;
+  // }
 
-  //refreshOceanColors(pl);
   refreshAimColors(pl);
 
   int cell = enemy.ships[pl.inputRow][pl.inputCol];
   if (cell != 0 && cell != 1) {
-    enemy.found[pl.inputRow][pl.inputCol] = true;
+    enemy.found[pl.inputRow][pl.inputCol] = HIT;
     check = cell;
     Serial.printf("check: %d\n", check);
     enemy.ships[pl.inputRow][pl.inputCol] = 1;
 
     shipSunk = true;
-    for (uint8_t y = 0; y < boardSize && shipSunk; y++)
-      for (uint8_t x = 0; x < boardSize && shipSunk; x++)
+    for (uint8_t y = 0; y < boardSize && shipSunk; y++){
+      for (uint8_t x = 0; x < boardSize && shipSunk; x++){
         if (enemy.ships[y][x] == check) shipSunk = false;
+      }
+    }
 
+    if(shipSunk == true){
+      for (uint8_t y = 0; y < boardSize; y++) {
+        for (uint8_t x = 0; x < boardSize; x++) {
+          if(boards[0].cheatSheet[y][x] == check){
+            boards[0].cheatSheet[y][x] = 0;
+            Serial.println("Cheater!");
+          }
+        }
+      }
+    }
+    
     audioFile = shipSunk ? Sunk_Sound : Hit_Sound;
     delay(1);
     hitShot = true;
+    switch(check){
+      case orca:    orcaHit    = true; break;
+      case sub:     subHit     = true; break;
+      case AOPS:    aopsHit    = true; break;
+      case frigate: halifaxHit = true; break;
+      case JSS:     jssHit     = true; break;
+
+    }
 
     enemy.remaining--;
     Serial.println(enemy.remaining);
     return true;
+  } else if (cell == 0){
+    enemy.found[pl.inputRow][pl.inputCol] = MISS;
+    hitShot = false;
+    shipSunk = false;
+    audioFile = Miss_Sound;
+    return false;
+  } else if (cell == 1){
+    hitShot = true;
+    shipSunk = false;
+    return false;
   }
-  
-  hitShot = false;
-  audioFile = Miss_Sound;
-  return false;
 }
 
 // ========================================================
@@ -914,11 +1190,11 @@ int getPosition(int positionPin) {
 }
 
 bool buttonPressed(int pin) {
-  static unsigned long lastTime[100]  = {};
-  static bool          lastState[100] = {};
+  static unsigned long lastTime[50]  = {};
+  static bool          lastState[50] = {};
   bool reading  = !digitalRead(pin);
   unsigned long now = millis();
-  if (reading != lastState[pin] && now - lastTime[pin] > 100) {
+  if (reading != lastState[pin] && now - lastTime[pin] > 50) {
     lastTime[pin]  = now;
     lastState[pin] = reading;
     return reading;
@@ -936,7 +1212,7 @@ void setVolume() {
   unsigned long volumeRepeat = millis();
   while (digitalRead(P1_RED_BTN) == HIGH) {
     blinkIndicatorR(players[0]);
-    if(millis() - volumeRepeat >= 5000){
+    if(millis() - volumeRepeat >= 10000){
       volume = 0.75;
       audioFile = Volume_Sound;
       volumeRepeat = millis();
@@ -957,7 +1233,7 @@ void setBrightness() {
   const uint8_t levels[10] = {0, 25, 55, 80, 105, 130, 155, 180, 205, 255};
   unsigned long brightnessRepeat = millis();
   while (digitalRead(P1_GREEN_BTN) == HIGH) {
-    if(millis() - brightnessRepeat >= 5000){
+    if(millis() - brightnessRepeat >= 10000){
         audioFile = Brightness_Sound;
         brightnessRepeat = millis();
     }
@@ -980,16 +1256,23 @@ void setBrightness() {
 // ========================================================
 //  SHIP DETECTION
 // ========================================================
+
 bool detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[], uint8_t player) {
   b.remaining = 0;
-  // bool    specialThree  = false;
   bool    finalCheck = false;
   uint8_t check;
+  int numShips = 0;
   uint8_t orcaCheck = 0;
   uint8_t frigateCheck = 0;
   uint8_t subCheck = 0;
   uint8_t AOPSCheck = 0;
   uint8_t JSSCheck = 0;
+    
+  for (uint8_t y = 0; y < boardSize; y++) {
+    for (uint8_t x = 0; x < boardSize; x++) {
+      b.ships[y][x] = 0;
+    }
+  }
 
   if(b.ships[0][0] == 0) {
     players[player].strip1.setPixelColor(0, 0, 0, 255);
@@ -1008,49 +1291,52 @@ bool detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[], uint8_t player
       for (uint8_t i = 1; i <= maxShipSize && (column + i) < boardSize; i++) {
         uint8_t device = gpioDeviceArray[row][column + i];
         uint8_t pin    = gpioPinArray[row][column + i];
-        //mcpDevice[device].pinMode(pin, INPUT_PULLUP);
         if (mcpDevice[device].digitalRead(pin) == LOW && b.ships[row][column + i] == EMPTY) {
           int shipID = (i + 1);
-          if (i == 2) {
-            uint8_t np = gpioPinArray[row][column + 1];
-            uint8_t nd = gpioDeviceArray[row][column + 1];
-            //mcpDevice[nd].pinMode(np, INPUT_PULLUP);
+          if (i == 1) {
+            uint8_t np = gpioPinArray[row][column + 2];
+            uint8_t nd = gpioDeviceArray[row][column + 2];
             if (mcpDevice[nd].digitalRead(np) == LOW) { 
-              shipID = 6; 
+              shipID = 6;
+              for (uint8_t x = column; x <= (column + 2); x++) {
+                b.ships[row][x] = shipID;
+                players[player].strip1.setPixelColor(indexConvert(row, x), 255, 0, 0);
+              }
             }
           }
-          // int shipID = specialThree ? 6 : (i + 1); 
           for (uint8_t x = column; x <= (column + i); x++) {
             b.ships[row][x] = shipID;
-            players[player].strip1.setPixelColor(indexConvert(row, x), 255, 0, 0);
+            players[player].strip1.setPixelColor(indexConvert(row, x), 255, 0, 0);  
           }
-          // specialThree = false;
+          numShips++;
         }
         if(b.ships[row][column + i] == 0) {
             players[player].strip1.setPixelColor(indexConvert(row, column + i), 0, 0, 255);
         }
-      }     
-      //players[player].strip1.show();
+      }
 
       // Vertical scan
       for (uint8_t i = 1; i <= maxShipSize && (row + i) < boardSize; i++) {
         uint8_t device = gpioDeviceArray[row + i][column];
         uint8_t pin    = gpioPinArray[row + i][column];
-        //mcpDevice[device].pinMode(pin, INPUT_PULLUP);
         if (mcpDevice[device].digitalRead(pin) == LOW && b.ships[row + i][column] == EMPTY) {
           int shipID = (i + 1);
-          if (i == 2) {
-            uint8_t np = gpioPinArray[row + 1][column];
-            uint8_t nd = gpioDeviceArray[row + 1][column];
-            //mcpDevice[nd].pinMode(np, INPUT_PULLUP);
+          if (i == 1) {
+            uint8_t np = gpioPinArray[row + 2][column];
+            uint8_t nd = gpioDeviceArray[row + 2][column];
             if (mcpDevice[nd].digitalRead(np) == LOW) { 
-              shipID = 6; 
+              shipID = 6;
+              for (uint8_t y = row; y <= (row + 2); y++) {
+                b.ships[y][column] = shipID;
+                players[player].strip1.setPixelColor(indexConvert(y, column), 255, 0, 0);
+              }
             }
           }
           for (uint8_t y = row; y <= (row + i); y++) {
             b.ships[y][column] = shipID;
             players[player].strip1.setPixelColor(indexConvert(y, column), 255, 0, 0);
           }
+          numShips++;
         }
         if(b.ships[row + i][column] == 0) {
           players[player].strip1.setPixelColor(indexConvert(row + i, column), 0, 0, 255);
@@ -1059,184 +1345,52 @@ bool detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[], uint8_t player
       mcpDevice[activeDevice].pinMode(gpioPinActive, INPUT_PULLUP);
     }
   }
-  players[player].strip1.show();
-  if (!finalCheck) {
-    finalCheck = true;
-    //numberOfShips = 0;
-    for (uint8_t y = 0; y < boardSize; y++) {
-      for (uint8_t x = 0; x < boardSize; x++) {
-        check = b.ships[y][x];
-        switch (check){
-          case 2:
-            orcaCheck++;
-            break;
-          
-          case 3:
-            subCheck++;
-            break;
+  if(firstScan == false){
+    players[player].strip1.show();
+  }
 
-          case 6:
-            AOPSCheck++;
-            break;
+  b.cheatSheet[10][10] = b.ships[10][10];
+  b.remaining = 17;
 
-          case 4:
-            frigateCheck++;
-            break;
-          
-          case 5:
-            JSSCheck++;
-            break;
-
-          default:
+  for (uint8_t y = 0; y < boardSize; y++) {
+    for (uint8_t x = 0; x < boardSize; x++) {
+      check = b.ships[y][x];
+      switch (check){
+        case 2:
+          orcaCheck++;
           break;
-        }
-      }
-    }
-    if(orcaCheck != 2 || subCheck != 3 || AOPSCheck != 3 || frigateCheck != 4 || JSSCheck != 5){
-      finalCheck = false;
-      orcaCheck = 0;
-      frigateCheck = 0;
-      subCheck = 0;
-      AOPSCheck = 0;
-      JSSCheck = 0;
-      for (uint8_t y = 0; y < boardSize; y++) {
-        for (uint8_t x = 0; x < boardSize; x++) {
-          b.ships[y][x] = 0;
-          //players[player].strip1.setPixelColor(indexConvert(y, x), 0, 0, 255);
-        }
+        
+        case 3:
+          subCheck++;
+          break;
+
+        case 6:
+          AOPSCheck++;
+          break;
+
+        case 4:
+          frigateCheck++;
+          break;
+        
+        case 5:
+          JSSCheck++;
+          break;
+
+        default:
+        break;
       }
     }
   }
-  //players[player].strip1.show();
-  b.remaining = 2;
+  if(orcaCheck != 2 || subCheck != 3 || AOPSCheck != 3 || frigateCheck != 4 || JSSCheck != 5 || numShips != 5){
+    finalCheck = false;
+  } else {
+    finalCheck = true;
+  }
   return finalCheck;
 }
 
-// void detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[], uint8_t player) {
-//   b.remaining = 0;
-//   uint8_t numberOfShips = 0;
-//   bool    specialThree  = false;
-//   bool    finalCheck    = false;
-//   uint8_t check;
-//   uint8_t orcaCheck = 0;
-//   uint8_t frigateCheck = 0;
-//   uint8_t subCheck = 0;
-//   uint8_t AOPSCheck = 0;
-//   uint8_t JSSCheck = 0;
-
-
-//   while (numberOfShips < 5) {
-//     printShipPositions();
-//     for (uint8_t row = 0; row < boardSize; row++) {
-//       for (uint8_t column = 0; column < boardSize; column++) {
-
-//         uint8_t gpioPinActive = gpioPinArray[row][column];
-//         uint8_t activeDevice  = gpioDeviceArray[row][column];
-
-//         mcpDevice[activeDevice].pinMode(gpioPinActive, OUTPUT);
-//         mcpDevice[activeDevice].digitalWrite(gpioPinActive, LOW);
-
-//         // Horizontal scan
-//         for (uint8_t i = 1; i <= maxShipSize && (column + i) < boardSize; i++) {
-//           uint8_t device = gpioDeviceArray[row][column + i];
-//           uint8_t pin    = gpioPinArray[row][column + i];
-//           mcpDevice[device].pinMode(pin, INPUT_PULLUP);
-//           if (mcpDevice[device].digitalRead(pin) == LOW && b.ships[row][column + i] == EMPTY) {
-//             numberOfShips++;
-//             if (i == 2) {
-//               uint8_t np = gpioPinArray[row][column + 1];
-//               uint8_t nd = gpioDeviceArray[row][column + 1];
-//               mcpDevice[nd].pinMode(np, INPUT_PULLUP);
-//               if (mcpDevice[nd].digitalRead(np) == LOW) { specialThree = true; numberOfShips--; }
-//             }
-//             int shipID = specialThree ? 6 : (i + 1);
-//             for (uint8_t x = column; x <= (column + i); x++) {
-//               players[player].strip1.setPixelColor(indexConvert(row, x), 255, 0, 0);
-//               players[player].strip1.show();
-//               b.ships[row][x] = shipID;
-//             }
-//             specialThree = false;
-//           }
-//         }
-
-//         // Vertical scan
-//         for (uint8_t i = 1; i <= maxShipSize && (row + i) < boardSize; i++) {
-//           uint8_t device = gpioDeviceArray[row + i][column];
-//           uint8_t pin    = gpioPinArray[row + i][column];
-//           mcpDevice[device].pinMode(pin, INPUT_PULLUP);
-//           if (mcpDevice[device].digitalRead(pin) == LOW && b.ships[row + i][column] == EMPTY) {
-//             numberOfShips++;
-//             if (i == 2) {
-//               uint8_t np = gpioPinArray[row + 1][column];
-//               uint8_t nd = gpioDeviceArray[row + 1][column];
-//               mcpDevice[nd].pinMode(np, INPUT_PULLUP);
-//               if (mcpDevice[nd].digitalRead(np) == LOW) { specialThree = true; numberOfShips--; }
-//             }
-//             int shipID = specialThree ? 6 : (i + 1);
-//             for (uint8_t y = row; y <= (row + i); y++) {
-//               players[player].strip1.setPixelColor(indexConvert(y, column), 255, 0, 0);
-//               players[player].strip1.show();
-//               b.ships[y][column] = shipID;
-//             }
-//             specialThree = false;
-//           }
-//         }
-
-//         mcpDevice[activeDevice].pinMode(gpioPinActive, INPUT_PULLUP);
-//       }
-//     }
-//     if (numberOfShips >= 5 && !finalCheck) {
-//       finalCheck = true;
-//       //numberOfShips = 0;
-//       for (uint8_t y = 0; y < boardSize; y++) {
-//         for (uint8_t x = 0; x < boardSize; x++) {
-//           check = b.ships[y][x];
-//           switch (check){
-//             case 2:
-//               orcaCheck++;
-//               break;
-            
-//             case 3:
-//               subCheck++;
-//               break;
-
-//             case 6:
-//               AOPSCheck++;
-//               break;
-
-//             case 4:
-//               frigateCheck++;
-//               break;
-            
-//             case 5:
-//               JSSCheck++;
-//               break;
-
-//             default:
-//             break;
-//           }
-//         }
-//       }
-//       if(orcaCheck != 2 || subCheck != 3 || AOPSCheck != 3 || frigateCheck != 4 || JSSCheck != 5){
-//         finalCheck = false;
-//         numberOfShips = 0;
-//         orcaCheck = 0;
-//         frigateCheck = 0;
-//         subCheck = 0;
-//         AOPSCheck = 0;
-//         JSSCheck = 0;
-//         for (uint8_t y = 0; y < boardSize; y++) {
-//           for (uint8_t x = 0; x < boardSize; x++) {
-//             b.ships[y][x] = 0;
-//           }
-//         }
-//       }
-//     }
-//   }
-//   b.remaining = 2;
-// }
-
-void initrandomMatrix(Board &b) {
+bool initrandomMatrix(Board &b) {
+  int threes = 0;
   memset(b.ships, 0, sizeof(b.ships));
   memset(b.found, 0, sizeof(b.found));
   b.remaining = 0;
@@ -1258,12 +1412,20 @@ void initrandomMatrix(Board &b) {
       for (int i = 0; i < blk.len; i++) {
         int r = horiz ? line : start + i;
         int c = horiz ? start + i : line;
-        b.ships[r][c] = 1;
+        if(blk.len == 3 && threes < 3)
+        {
+          b.ships[r][c] = 6;
+          threes++;
+        } else {
+          b.ships[r][c] = blk.len;
+        }
       }
       b.remaining += blk.len;
       placed = true;
     }
   }
+  // b.remaining = 1;
+  return true;
 }
 
 void printShipPositions() {
@@ -1272,6 +1434,19 @@ void printShipPositions() {
     for (uint8_t y = 0; y < 10; y++) {
       for (uint8_t x = 0; x < 10; x++) {
         Serial.print(boards[i].ships[y][x]);
+        Serial.print(", ");
+      }
+      Serial.println();
+    }
+  }
+}
+
+void printShipPositionsFound() {
+  for (int i = 0; i < 2; i++) {
+    Serial.println();
+    for (uint8_t y = 0; y < 10; y++) {
+      for (uint8_t x = 0; x < 10; x++) {
+        Serial.print(boards[i].found[y][x]);
         Serial.print(", ");
       }
       Serial.println();
@@ -1446,7 +1621,7 @@ void gameOverSkull() {
   lastUpdate = millis();
   refreshAimColors(players[otherPlayer(activePlayer)]);
 
-// toggle jaw more frequently
+  // toggle jaw more frequently
   jawTimer++;
   if (jawTimer > 2) {   // was 8
     jawTimer = 0;
@@ -1646,5 +1821,313 @@ void gameOverFireworks() {
       if(alive == 0)
         f.active = false;
     }
+  }
+}
+
+// ========================================================
+//  AI
+// ========================================================
+
+void AI(){
+  if(huntingMode == true){
+    Serial.println();
+    Serial.println("Hunting");
+    AI_GenerateRandomShot();
+    
+    Serial.print("Target: ");
+    Serial.print(players[1].inputRow);
+    Serial.print(", ");
+    Serial.println(players[1].inputCol);
+
+    bool hit = commitShot(players[1]);
+
+    if(hit){
+      huntingMode = false;
+      int r = players[1].inputRow;
+      int c = players[1].inputCol;
+
+      firstHit.r = r;
+      firstHit.c = c;
+      lastHit = firstHit;
+
+      shipOrientation = UNKNOWN;
+      Serial.println("UNKNOWN");
+      queueSize = 0;
+
+      // Add 4 possible directions
+      resetTargetQueue();
+      getTargetsRandom(r, c);
+      printTargetQueue();
+    }
+  }
+  else{
+    Serial.println();
+    Serial.println("Targeting");
+    AI_TargetShoot();
+  }
+  gameState = STALL;
+}
+
+bool checkForShip(int y, int x){
+  if (y > 0 &&
+   ((boards[0].ships[y - 1][x] == orca && orcaHit) ||
+    (boards[0].ships[y - 1][x] == sub && subHit) ||
+    (boards[0].ships[y - 1][x] == AOPS && aopsHit) ||
+    (boards[0].ships[y - 1][x] == frigate && halifaxHit) ||
+    (boards[0].ships[y - 1][x] == JSS && jssHit))) return true;
+
+if (y < boardSize - 1 &&
+   ((boards[0].ships[y + 1][x] == orca && orcaHit) ||
+    (boards[0].ships[y + 1][x] == sub && subHit) ||
+    (boards[0].ships[y + 1][x] == AOPS && aopsHit) ||
+    (boards[0].ships[y + 1][x] == frigate && halifaxHit) ||
+    (boards[0].ships[y + 1][x] == JSS && jssHit))) return true;
+
+if (x > 0 &&
+   ((boards[0].ships[y][x - 1] == orca && orcaHit) ||
+    (boards[0].ships[y][x - 1] == sub && subHit) ||
+    (boards[0].ships[y][x - 1] == AOPS && aopsHit) ||
+    (boards[0].ships[y][x - 1] == frigate && halifaxHit) ||
+    (boards[0].ships[y][x - 1] == JSS && jssHit))) return true;
+
+if (x < boardSize - 1 &&
+   ((boards[0].ships[y][x + 1] == orca && orcaHit) ||
+    (boards[0].ships[y][x + 1] == sub && subHit) ||
+    (boards[0].ships[y][x + 1] == AOPS && aopsHit) ||
+    (boards[0].ships[y][x + 1] == frigate && halifaxHit) ||
+    (boards[0].ships[y][x + 1] == JSS && jssHit))) return true;
+
+  Serial.println("no nearby ships found");
+  return false;
+}
+
+void AI_GenerateRandomShot(){ //Need to uncomment code here
+  // uint8_t r = 5;
+  // uint8_t c = 3;
+  uint8_t r;
+  uint8_t c;
+
+  for (uint8_t y = 0; y < boardSize; y++) {
+    for (uint8_t x = 0; x < boardSize; x++) {
+      int ship = boards[0].ships[y][x];
+      if(ship == 1){
+
+        if(checkForShip(y, x)){
+          Serial.println("Known Hit Ship Found");
+          if(shipOrientation == VERTICAL) {
+            shipOrientation = HORIZONTAL;
+            resetTargetQueue();
+            getTargets(y, x - 1);
+            getTargets(y, x + 1);
+            printTargetQueue();
+          }
+          else if (shipOrientation == HORIZONTAL){
+            shipOrientation = VERTICAL;
+            resetTargetQueue();
+            getTargets(y - 1, x);
+            getTargets(y + 1, x);
+            printTargetQueue();
+          } 
+          else {
+            resetTargetQueue();
+            getTargetsRandom(y, x);
+            printTargetQueue();
+          }
+
+          firstHit.r = y;
+          firstHit.c = x;
+
+          huntingMode = false;
+
+          AI_TargetShoot();
+
+          return;
+        }
+      }
+    }
+  }
+
+  do{
+    r = random(0, boardSize);
+    c = random(0, boardSize);
+    Serial.print("row: ");
+    Serial.print(r);
+    Serial.print(" col: ");
+    Serial.println(c);
+  }while(boards[0].found[r][c] == HIT || boards[0].found[r][c] == MISS  || ((r + c) % smallestShipAlive) != 0);
+  // while(enemyBoard.ships[r][c] == HIT || enemyBoard.ships[r][c] == MISS  ||((r + c) % smallestShipAlive) != 0);
+  // boards[0].ships[r][c] == 0 ||
+
+  players[1].inputRow = r;
+  players[1].inputCol = c;
+}
+
+void getTargetsRandom(int r, int c){
+  int dirs[4][2] = {{0,-1},{0,1},{-1,0},{1,0}};
+
+  for(int i = 3; i > 0; i--){
+    int j=random(i + 1);
+    int t0=dirs[i][0], t1=dirs[i][1];
+    dirs[i][0]=dirs[j][0]; dirs[i][1]=dirs[j][1];
+    dirs[j][0]=t0; dirs[j][1]=t1;
+  }
+
+  resetTargetQueue();
+  for(int i = 0; i < 4; i++) getTargets(r + dirs[i][0], c + dirs[i][1]);
+}
+
+void AI_TargetShoot(){
+  int invalidQueue = 0;
+  Serial.println("AI shooting");
+  printTargetQueue();
+  Serial.print("Target counter: ");
+  Serial.println(targetCounter);
+  players[1].inputRow = targetQueue[targetCounter].r;
+  players[1].inputCol = targetQueue[targetCounter].c;
+  uint8_t row = players[1].inputRow;
+  uint8_t col = players[1].inputCol;
+
+  targetCounter++;
+  
+
+
+  Serial.print("Target: ");
+  Serial.print(players[1].inputRow);
+  Serial.print(", ");
+  Serial.println(players[1].inputCol);
+
+  bool hit = commitShot(players[1]);
+
+  if(hit){
+    if(row == firstHit.r){
+      shipOrientation = HORIZONTAL;
+      //targetCounter = 0;
+    }
+    else if(col == firstHit.c){
+      shipOrientation = VERTICAL;
+      //targetCounter = 0;
+    }
+    
+    // lastHit.r = row;
+    // lastHit.c = col;
+
+    if(shipSunk){
+      resetTargetQueue();
+      printTargetQueue();
+      
+      huntingMode = true;
+      shipOrientation = UNKNOWN;
+      targetCounter = 0;
+      queueSize = 0;
+    }
+  }
+  if(shipOrientation == HORIZONTAL) {
+    resetTargetQueue();
+    bool negitiveCol = getTargets(firstHit.r, firstHit.c - 1);
+    bool positiveCol = getTargets(firstHit.r, firstHit.c + 1);
+    if(!hit && !negitiveCol && !positiveCol) {
+      queueSize = 0;
+      targetCounter = 0;
+      resetTargetQueue();
+      Serial.println("Reset to first hit ver");
+      shipOrientation = VERTICAL;
+      getTargets(firstHit.r - 1, firstHit.c);
+      getTargets(firstHit.r + 1, firstHit.c);
+      printTargetQueue();
+    }else if(hit){
+      queueSize = 0;
+      targetCounter = 0;
+      Serial.println("HOR");
+      resetTargetQueue();
+      getTargets(row, col - 1);
+      getTargets(row, col + 1);
+      printTargetQueue();
+    }
+  }
+  else if(shipOrientation == VERTICAL) {
+    resetTargetQueue();
+    bool negitiveRow  = getTargets(firstHit.r - 1, firstHit.c);
+    bool positiveRow  = getTargets(firstHit.r + 1, firstHit.c);
+    if(!hit && !negitiveRow && !positiveRow){
+      queueSize = 0;
+      targetCounter = 0;
+      resetTargetQueue();
+      shipOrientation = HORIZONTAL;
+      Serial.println("Reset to first hit hor");
+      getTargets(firstHit.r, firstHit.c - 1);
+      getTargets(firstHit.r, firstHit.c + 1);
+      printTargetQueue();
+    } else if (hit){
+      queueSize = 0;
+      targetCounter = 0;
+      resetTargetQueue();
+      Serial.println("VER");
+      getTargets(row - 1, col);
+      getTargets(row + 1, col);
+      printTargetQueue();
+    }
+  }
+  invalidQueue = 0;
+  for(int i = 0; i < 4; i++){
+    if(targetQueue[i].r == 0 && targetQueue[i].c == 0) invalidQueue++;
+  }
+  if(invalidQueue == 4) {
+    invalidQueue = 0;
+    queueSize = 0;
+    targetCounter = 0;
+    huntingMode = true;
+  }
+}
+
+bool getTargets(int row, int col) {
+  Serial.println("Getting next target.");
+  Serial.print("row: ");
+  Serial.print(row);
+  Serial.print(" col: ");
+  Serial.println(col);
+
+  if (queueSize >= MAX_QUEUE) {
+    Serial.println("Invalid shot queue");
+    return false;
+  }
+
+  if (row < 0 || col < 0) {
+    Serial.println("Invalid shot board");
+    return false;
+  }
+
+  if (row >= boardSize || col >= boardSize) {
+    Serial.println("Invalid shot board");
+    return false;
+  }
+
+  if (boards[0].found[row][col] == MISS || boards[0].found[row][col] == HIT) {
+    Serial.print(boards[0].found[row][col]);  
+    Serial.println(", Invalid shot hit/miss");
+    return false;
+  }
+  Serial.print("Queue size: ");
+  Serial.print(queueSize);
+  targetQueue[queueSize] = (struct Point){row, col};
+  queueSize++;
+  Serial.print(", Queue size: ");
+  Serial.println(queueSize);
+  return true;
+}
+
+void resetTargetQueue() {
+  for(int i = 0; i < MAX_QUEUE; i++){
+    targetQueue[i].r = 0;
+    targetQueue[i].c = 0;
+  }
+  Serial.println("Done resetting queue.");
+}
+
+void printTargetQueue() {
+  for(int i = 0; i < MAX_QUEUE; i++){
+    Serial.print("Target Queue: ");
+    Serial.print(targetQueue[i].r);
+    Serial.print(", ");
+    Serial.println(targetQueue[i].c);
   }
 }
