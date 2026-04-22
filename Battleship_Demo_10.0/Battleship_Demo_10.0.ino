@@ -484,12 +484,14 @@ void setup() {
     }
     if(digitalRead(P1_RED_BTN) == LOW && digitalRead(P1_GREEN_BTN) == LOW){
       if(millis() - holdCheck >= 5000){
-        singlePlayer = true;
-        audioFile = Single_Player_Sound;
-        players[0].strip1.clear();
-        players[1].strip2.clear();
-        players[0].strip1.show();
-        players[1].strip2.show();
+       if(singlePlayer == false){
+         singlePlayer = true;
+         audioFile = Single_Player_Sound;
+         players[0].strip1.clear();
+         players[1].strip2.clear();
+         players[0].strip1.show();
+         players[1].strip2.show();
+        }
       }
     } else {
       holdCheck = millis();
