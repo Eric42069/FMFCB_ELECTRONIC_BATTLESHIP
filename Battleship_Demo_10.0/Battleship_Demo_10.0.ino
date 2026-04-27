@@ -517,6 +517,10 @@ void setup() {
         d2 = initrandomMatrix(boards[1]);
       }
     firstScan = false;
+    if(adminCount >=3){
+      blinkIndicatorR(players[0]);
+      blinkIndicatorG(players[0]);
+    }
   }
 
   if(adminCount >= 3){
