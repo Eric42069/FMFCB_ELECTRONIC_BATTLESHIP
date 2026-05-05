@@ -1299,7 +1299,7 @@ bool detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[], uint8_t player
         uint8_t pin    = gpioPinArray[row][column + i];
         if (mcpDevice[device].digitalRead(pin) == LOW && b.ships[row][column + i] == EMPTY) {
           int shipID = (i + 1);
-          if (i == 1) {
+          if (i == 1 && (column + 2) < boardSize) {
             uint8_t np = gpioPinArray[row][column + 2];
             uint8_t nd = gpioDeviceArray[row][column + 2];
             if (mcpDevice[nd].digitalRead(np) == LOW) { 
@@ -1327,7 +1327,7 @@ bool detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[], uint8_t player
         uint8_t pin    = gpioPinArray[row + i][column];
         if (mcpDevice[device].digitalRead(pin) == LOW && b.ships[row + i][column] == EMPTY) {
           int shipID = (i + 1);
-          if (i == 1) {
+          if (i == 1 && (row + 2) < boardSize) {
             uint8_t np = gpioPinArray[row + 2][column];
             uint8_t nd = gpioDeviceArray[row + 2][column];
             if (mcpDevice[nd].digitalRead(np) == LOW) { 
