@@ -13,11 +13,11 @@
 #define LED_COUNT 100
 
 // Bus one pins
-#define I2C_SDA0 16
-#define I2C_SCL0 15
-// Bus two pins
-#define I2C_SDA1 18
-#define I2C_SCL1 17
+#define I2C_SDA0 18
+#define I2C_SCL0 17
+// Bus two pins Swapped MCP inputs
+#define I2C_SDA1 16
+#define I2C_SCL1 15
 
 #define EMPTY 0
 #define boardSize 10
@@ -328,6 +328,8 @@ bool halifaxHit = false;
 bool jssHit = false;
 bool firstScan = true;
 
+bool startUp = true;
+
 struct Point {
   uint8_t r;
   uint8_t c;
@@ -366,10 +368,10 @@ void AudioTaskCode(void *parameter) {
           tempBufLen = 0;
         }
         if (toPlay == 5) {
-          int willhielm = random(68,71);
+          int willhielm = random(58,61);
           Serial.print("Wilhielm: ");
           Serial.println(willhielm);
-          if(willhielm == 69){
+          if(willhielm == 59){
             if (loadFileToRam(kPlaylist[20], tempBuf, tempBufLen, tempSampleRate)) {
               setupI2S(tempSampleRate);
               playFromRam(tempBuf, tempBufLen);
@@ -442,10 +444,13 @@ void setup() {
   initilizeGPIOPins();
   LittleFS.begin();
 
-  xTaskCreatePinnedToCore(
+  if (startUp == true){
+    xTaskCreatePinnedToCore(
     AudioTaskCode, "audioTask",
     10000, NULL, 0, &audioTask, 0
-  );
+    );
+  }
+
 
   delay(4000);
 
@@ -468,8 +473,9 @@ void setup() {
   audioFile = Deploy_Sound;
   delay(2000);
 
-  int adminCount = 0;
+  int adminCount = false;
   unsigned long holdCheck = 0;
+  unsigned long holdCheckAdmin = 0;
   bool d1 = false;
   bool d2 = false;
   bool redeploy1 = true;
@@ -477,10 +483,11 @@ void setup() {
 
   while(!d1 || !d2){
     if(digitalRead(P1_GREEN_BTN) == LOW && getPosition(P1_POT_COL) == 1 && getPosition(P1_POT_ROW) == 1){
-      if(buttonPressed(P1_RED_BTN)){
-        adminCount++;
-        Serial.println(adminCount);
+      if(millis() - holdCheckAdmin >= 3000){
+        adminCount = true;
       }
+    } else {
+      holdCheckAdmin = millis();
     }
     if(digitalRead(P1_RED_BTN) == LOW && digitalRead(P1_GREEN_BTN) == LOW){
       if(millis() - holdCheck >= 5000){
@@ -517,13 +524,13 @@ void setup() {
         d2 = initrandomMatrix(boards[1]);
       }
     firstScan = false;
-    if(adminCount >=3){
+    if(adminCount == true){
       blinkIndicatorR(players[0]);
       blinkIndicatorG(players[0]);
     }
   }
 
-  if(adminCount >= 3){
+  if(adminCount == true){
     for (uint8_t y = 0; y < boardSize; y++) {
       for (uint8_t x = 0; x < boardSize; x++) {
         if(boards[1].ships[y][x] != 0){
@@ -551,6 +558,9 @@ void setup() {
 
   Serial.println("Starting Game");
   stripUpdate = true;
+  startUp = false;
+  lastAimUpdate = millis();
+
   delay(3500);
   if(singlePlayer){
     onePlayer();
@@ -605,16 +615,6 @@ void twoPlayer() {
             digitalWrite(pl.redLED,   LOW);
             digitalWrite(pl.greenLED, LOW);
             gameState = STALL;
-
-            // if (!hit) {
-            //   digitalWrite(pl.redLED,   LOW);
-            //   digitalWrite(pl.greenLED, LOW);
-            //   gameState = STALL;
-            // } else if (gameState != GAME_OVER) {
-            //   gameState = STALL;
-            //   digitalWrite(pl.redLED,   LOW);
-            //   digitalWrite(pl.greenLED, LOW);
-            // }
         }
         if (pl.inputRow != preInputRow || pl.inputCol != preInputCol) {
           gameState    = WAITING_FOR_AIM;
@@ -736,16 +736,6 @@ void onePlayer() {
             digitalWrite(pl.redLED,   LOW);
             digitalWrite(pl.greenLED, LOW);
             gameState = STALL;
-
-            // if (!hit) {
-            //   digitalWrite(pl.redLED,   LOW);
-            //   digitalWrite(pl.greenLED, LOW);
-            //   gameState = STALL;
-            // } else if (gameState != GAME_OVER) {
-            //   gameState = STALL;
-            //   digitalWrite(pl.redLED,   LOW);
-            //   digitalWrite(pl.greenLED, LOW);
-            // }
           }
           if (pl.inputRow != preInputRow || pl.inputCol != preInputCol) {
             gameState = WAITING_FOR_AIM;
@@ -1430,7 +1420,6 @@ bool initrandomMatrix(Board &b) {
       placed = true;
     }
   }
-  // b.remaining = 1;
   return true;
 }
 
@@ -1465,6 +1454,42 @@ void initilizeGPIOPins() {
     for (uint8_t j = 0; j < 14; j++) mcp0[i].pinMode(j, INPUT_PULLUP);
   for (uint8_t i = 0; i < 7; i++)
     for (uint8_t j = 0; j < 14; j++) mcp1[i].pinMode(j, INPUT_PULLUP);
+
+  if(startUp == false){
+    for (uint8_t p = 0; p < 2; p++){
+      for (uint8_t y = 0; y < boardSize; y++) 
+        for (uint8_t x = 0; x < boardSize; x++){
+          boards[p].found[y][x] = 0;
+          boards[p].cheatSheet[y][x] = 0;
+      } 
+    }
+
+
+    audioFile = -1;
+    readDone = true;
+    volume = 0.75;
+    brightness = 0;
+    hitShot = false;
+    forceOcean = false;
+    check = 0;
+    shipSunk = false;
+    gameOverUpdate = false;
+    singlePlayer = false;
+    smallestShipAlive = 2;
+    firstThreeSunk = false;
+    orcaHit = false;
+    subHit = false;
+    aopsHit = false;
+    halifaxHit = false;
+    jssHit = false;
+    firstScan = true;
+    queueSize = 0;
+    targetCounter = 0;
+    shipOrientation = UNKNOWN;
+    huntingMode = true;
+
+    resetTargetQueue();
+  }
 }
 
 // ========================================================
@@ -1815,12 +1840,12 @@ void gameOverFireworks() {
           uint8_t b = current & 0xFF;
 
           // don't overwrite green background
-          if(!(g > 0 && r == 0 && b == 0)){
+          //if(!(g > 0 && r == 0 && b == 0)){
             players[activePlayer].strip2.setPixelColor(
               indexConvert(py, px),
               color
             );
-          }
+          //}
         }
       }
 
