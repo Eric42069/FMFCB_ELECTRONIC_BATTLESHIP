@@ -845,12 +845,10 @@ void saveColors(PlayerHW &pl) {
 
 void refreshAimColors(PlayerHW &pl) {
   for (int i = 0; i < LED_COUNT; i++) pl.strip2.setPixelColor(i, pl.previousColors2[i]);
-  //stripUpdate = true;
 }
 
 void refreshOceanColors(PlayerHW &pl) {
   for (int i = 0; i < LED_COUNT; i++) pl.strip1.setPixelColor(i, pl.previousColors1[i]);
-  //stripUpdate = true;
 }
 
 void preaim(PlayerHW &pl) {
@@ -1118,8 +1116,8 @@ bool commitShot(PlayerHW &pl) {
     if(shipSunk == true){
       for (uint8_t y = 0; y < boardSize; y++) {
         for (uint8_t x = 0; x < boardSize; x++) {
-          if(boards[0].cheatSheet[y][x] == check){
-            boards[0].cheatSheet[y][x] = 0;
+          if(enemy.cheatSheet[y][x] == check){
+            enemy.found[y][x] = 9;
             Serial.println("Cheater!");
           }
         }
@@ -1345,7 +1343,12 @@ bool detectShipPositions(Board &b, Adafruit_MCP23X17 mcpDevice[], uint8_t player
     players[player].strip1.show();
   }
 
-  b.cheatSheet[10][10] = b.ships[10][10];
+  for (uint8_t y = 0; y < boardSize; y++) {
+    for (uint8_t x = 0; x < boardSize; x++) {
+      b.cheatSheet[y][x] = b.ships[y][x];
+    }
+  }
+
   b.remaining = 17;
 
   for (uint8_t y = 0; y < boardSize; y++) {
@@ -1933,14 +1936,23 @@ if (x < boardSize - 1 &&
 }
 
 void AI_GenerateRandomShot(){ //Need to uncomment code here
-  // uint8_t r = 5;
-  // uint8_t c = 3;
+  //uint8_t r = 3;
+  //uint8_t c = 3;
   uint8_t r;
   uint8_t c;
+  bool firstPass = true;
+
+  for (uint8_t y = 0; y < 10; y++) {
+    Serial.println("");
+    for (uint8_t x = 0; x < 10; x++) {
+      Serial.print(boards[0].found[y][x]);
+      Serial.print(", ");
+    }
+  }
 
   for (uint8_t y = 0; y < boardSize; y++) {
     for (uint8_t x = 0; x < boardSize; x++) {
-      int ship = boards[0].ships[y][x];
+      int ship = boards[0].found[y][x];
       if(ship == 1){
 
         if(checkForShip(y, x)){
@@ -1967,6 +1979,11 @@ void AI_GenerateRandomShot(){ //Need to uncomment code here
 
           firstHit.r = y;
           firstHit.c = x;
+          
+          Serial.print("Y = ");
+          Serial.println(y);
+          Serial.print("X = ");
+          Serial.println(x);
 
           huntingMode = false;
 
@@ -1986,8 +2003,12 @@ void AI_GenerateRandomShot(){ //Need to uncomment code here
     Serial.print(" col: ");
     Serial.println(c);
   }while(boards[0].found[r][c] == HIT || boards[0].found[r][c] == MISS  || ((r + c) % smallestShipAlive) != 0);
-  // while(enemyBoard.ships[r][c] == HIT || enemyBoard.ships[r][c] == MISS  ||((r + c) % smallestShipAlive) != 0);
-  // boards[0].ships[r][c] == 0 ||
+
+  if(firstPass == true){
+    r = 3;
+    c = 3;
+    firstPass = false;
+  }
 
   players[1].inputRow = r;
   players[1].inputCol = c;
@@ -2032,15 +2053,10 @@ void AI_TargetShoot(){
   if(hit){
     if(row == firstHit.r){
       shipOrientation = HORIZONTAL;
-      //targetCounter = 0;
     }
     else if(col == firstHit.c){
       shipOrientation = VERTICAL;
-      //targetCounter = 0;
     }
-    
-    // lastHit.r = row;
-    // lastHit.c = col;
 
     if(shipSunk){
       resetTargetQueue();
