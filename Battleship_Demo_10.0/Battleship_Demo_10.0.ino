@@ -13,11 +13,11 @@
 #define LED_COUNT 100
 
 // Bus one pins
-#define I2C_SDA0 18
-#define I2C_SCL0 17
+#define I2C_SDA0 16
+#define I2C_SCL0 15
 // Bus two pins Swapped MCP inputs
-#define I2C_SDA1 16
-#define I2C_SCL1 15
+#define I2C_SDA1 18
+#define I2C_SCL1 17
 
 #define EMPTY 0
 #define boardSize 10
@@ -2003,12 +2003,6 @@ void AI_GenerateRandomShot(){ //Need to uncomment code here
     Serial.print(" col: ");
     Serial.println(c);
   }while(boards[0].found[r][c] == HIT || boards[0].found[r][c] == MISS  || ((r + c) % smallestShipAlive) != 0);
-
-  if(firstPass == true){
-    r = 3;
-    c = 3;
-    firstPass = false;
-  }
 
   players[1].inputRow = r;
   players[1].inputCol = c;
