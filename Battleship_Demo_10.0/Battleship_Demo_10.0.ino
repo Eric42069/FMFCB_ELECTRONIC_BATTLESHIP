@@ -88,8 +88,8 @@ TwoWire I2C_1 = TwoWire(1);
 #define P2_RED_BTN    37
 #define P2_GREEN_LED  36
 #define P2_RED_LED    35
-#define P2_POT_ROW     9
-#define P2_POT_COL    10
+#define P2_POT_ROW    10
+#define P2_POT_COL     9
 #define P2_LED_PIN1    1
 #define P2_LED_PIN2    2
 
@@ -121,7 +121,7 @@ volatile bool readDone = true;
 enum Player { PLAYER_1 = 0, PLAYER_2 = 1 };
 enum GameState { WAITING_FOR_AIM, STALL, WAITING_FOR_CONFIRM, GAME_OVER };
 
-Player activePlayer = PLAYER_1;
+Player activePlayer = PLAYER_2;
 GameState gameState = WAITING_FOR_AIM;
 
 Player otherPlayer(Player p) { return (p == PLAYER_1) ? PLAYER_2 : PLAYER_1; }
@@ -843,12 +843,50 @@ void saveColors(PlayerHW &pl) {
   for (int i = 0; i < LED_COUNT; i++) pl.previousColors2[i] = pl.strip2.getPixelColor(i);
 }
 
+// void refreshAimColors(PlayerHW &pl) {
+//   for (int i = 0; i < LED_COUNT; i++) pl.strip2.setPixelColor(i, pl.previousColors2[i]);
+// }
+
 void refreshAimColors(PlayerHW &pl) {
-  for (int i = 0; i < LED_COUNT; i++) pl.strip2.setPixelColor(i, pl.previousColors2[i]);
+  for (int i = 0; i < LED_COUNT; i++) {
+
+    uint32_t c2 = pl.previousColors2[i];
+
+    uint8_t r2 = (c2 >> 16) & 0xFF;
+    uint8_t g2 = (c2 >> 8)  & 0xFF;
+    uint8_t b2 =  c2        & 0xFF;
+
+    
+    if (r2 > 0 && g2 <= 10 && b2 <= 10) {
+      pl.strip2.setPixelColor(i, 255, 0, 0);
+    } else if (r2 == g2 && b2 == g2 && r2 == b2) {
+      pl.strip2.setPixelColor(i, 127, 127, 127);
+    } else if (r2 >= 3 && g2 > 0 && b2 >= 3) {
+      pl.strip2.setPixelColor(i, 5, 75, 5);
+    } else if (r2 <= 2 && g2 > 0 && b2 <= 2) {
+      pl.strip2.setPixelColor(i, 2, 75, 2);
+    } else {
+      pl.strip2.setPixelColor(i, c2);
+    }
+  }
 }
 
 void refreshOceanColors(PlayerHW &pl) {
-  for (int i = 0; i < LED_COUNT; i++) pl.strip1.setPixelColor(i, pl.previousColors1[i]);
+  for (int i = 0; i < LED_COUNT; i++) {
+    uint32_t c1 = pl.previousColors1[i];
+
+    uint8_t r1 = (c1 >> 16) & 0xFF;
+    uint8_t g1 = (c1 >> 8)  & 0xFF;
+    uint8_t b1 =  c1        & 0xFF;
+
+    if (r1 > 0 && g1 <= 10 && b1 <= 10) {
+      pl.strip1.setPixelColor(i, 255, 0, 0);
+    } else if (r1 == g1 && b1 == g1 && r1 == b1) {
+      pl.strip1.setPixelColor(i, 127, 127, 127);
+    } else {
+      pl.strip1.setPixelColor(i, c1);
+    }
+  }
 }
 
 void preaim(PlayerHW &pl) {
